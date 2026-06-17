@@ -1,0 +1,9 @@
+const { contextBridge, ipcRenderer } = require('electron');
+
+contextBridge.exposeInMainWorld('electronAPI', {
+  getConfig: () => ipcRenderer.invoke('get-config'),
+  openDb: () => ipcRenderer.invoke('open-db'),
+  executeQuery: (sql, params) => ipcRenderer.invoke('execute-query', sql, params),
+  exportCsv: (data, filename) => ipcRenderer.invoke('export-csv', data, filename),
+  exportXlsx: (data, filename) => ipcRenderer.invoke('export-xlsx', data, filename)
+});

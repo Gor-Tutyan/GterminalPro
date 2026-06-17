@@ -1,0 +1,26 @@
+{
+  "title": "GTerminalPro",
+  "database": "./data/database.db",
+  "windows": [
+    {
+      "id": "curr_trans",
+      "title": "Текущие транзакции",
+      "filters": [
+        { "name": "TermNumber", "label": "ID Терминала" },
+        { "name": "RRN", "label": "RRN" }
+      ],
+      "query": "SELECT\n    TID,\n    TRANS_DATE,\n    AMOUNT,\n    RRN,\n    RESP_CODE,\n    STAN,\n    PAN,\n    AUTH_CODE\nFROM Curr_trans\nWHERE 1=1\n\n[[ AND TID = {TermNumber} ]]\n[[ AND RRN = {RRN} ]]",
+      "grid": [
+        { "field": "TID", "title": "Терминал" },
+        { "field": "TRANS_DATE", "title": "Дата" },
+        { "field": "AMOUNT", "title": "Сумма" },
+        { "field": "RRN", "title": "RRN" }
+      ],
+      "details": [
+        { "field": "PAN", "title": "Карта" },
+        { "field": "AUTH_CODE", "title": "Авторизация" },
+        { "field": "STAN", "title": "STAN" }
+      ]
+    }
+  ]
+}

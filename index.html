@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GTerminalPro</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; padding: 0; background: #f4f4f4; }
+    .container { display: flex; height: 100vh; }
+    .sidebar { width: 240px; background: #2c3e50; color: white; padding: 15px; overflow-y: auto; }
+    .main { flex: 1; display: flex; flex-direction: column; }
+    .header { background: #34495e; color: white; padding: 15px; font-size: 20px; }
+    .content { flex: 1; padding: 20px; overflow: auto; background: white; }
+    button { padding: 10px 15px; margin: 5px; cursor: pointer; }
+    .window-list button { width: 100%; margin: 8px 0; padding: 12px; background: #34495e; color: white; border: none; text-align: left; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { border: 1px solid #ddd; padding: 8px; }
+    th { background: #f2f2f2; }
+    tr:hover { background: #f0f0f0; cursor: pointer; }
+    .filters { display: flex; flex-wrap: wrap; gap: 20px; margin-bottom: 20px; }
+    .details { margin-top: 30px; padding: 20px; border: 1px solid #ddd; background: #fafafa; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="sidebar">
+      <h3>Меню</h3>
+      <div class="window-list" id="window-list"></div>
+    </div>
+    <div class="main">
+      <div class="header" id="window-title">GTerminalPro</div>
+      <div class="content">
+        <div id="current-window"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

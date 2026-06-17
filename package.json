@@ -1,0 +1,19 @@
+{
+  "name": "gterminalpro",
+  "version": "1.0.0",
+  "description": "Универсальный GUI для SQLite",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win --x64"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.8.0",
+    "electron": "^34.0.0",
+    "papaparse": "^5.4.1",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "electron-builder": "^25.1.8"
+  }
+}
