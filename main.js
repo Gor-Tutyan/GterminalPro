@@ -1,10 +1,120 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const sqlite3 = require('sqlite3').verbose();
+const Database = require('better-sqlite3');
+
+const bcrypt = require('bcryptjs');
+
+let currentUser = null;
+
+ipcMain.handle('login', async (event, login, password) => {
+  try {
+
+    // если БД ещё не открыта
+    if (!db) {
+
+      const config = getConfig();
+
+      if (!fs.existsSync(config.database)) {
+        return {
+          success: false,
+          error: 'База не найдена'
+        };
+      }
+
+      db = new Database(config.database);
+    }
+
+    console.log('LOGIN:', login);
+
+    const user = db.prepare(`
+      SELECT *
+      FROM USERS
+      WHERE LOGIN = ?
+      AND IS_ACTIVE = 1
+    `).get(login);
+
+    console.log('USER:', user);
+
+    if (!user) {
+      return { success: false };
+    }
+
+    const valid = await bcrypt.compare(
+      password,
+      user.PASSWORD_HASH
+    );
+
+    console.log('VALID:', valid);
+
+    if (!valid) {
+      return { success: false };
+    }
+
+    currentUser = {
+        id: user.ID,
+        login: user.LOGIN,
+        role: user.ROLE,
+
+        windowsAccess: user.WINDOWS_ACCESS,
+
+        insertAccess: user.INSERT_ACCESS,
+        updateAccess: user.UPDATE_ACCESS,
+        deleteAccess: user.DELETE_ACCESS
+    };
+
+    return {
+      success: true,
+      user: currentUser
+    };
+
+  } catch (err) {
+
+    console.error(err);
+
+    return {
+      success: false,
+      error: err.message
+    };
+  }
+});
+
+ipcMain.handle('get-current-user', () => {
+    return currentUser;
+});
+
 
 let mainWindow;
 let db = null;
+
+// ==================== PATHS ====================
+
+const APP_DIR = 'C:/GTerminalPro';
+const EXPORT_DIR = path.join(APP_DIR, 'exports');
+
+if (!fs.existsSync(APP_DIR)) {
+  fs.mkdirSync(APP_DIR, { recursive: true });
+}
+
+if (!fs.existsSync(EXPORT_DIR)) {
+  fs.mkdirSync(EXPORT_DIR, { recursive: true });
+}
+
+function getConfig() {
+  const configPath = path.join(APP_DIR, 'config.json');
+
+  if (!fs.existsSync(configPath)) {
+    throw new Error(
+      `Файл конфигурации не найден:\n${configPath}`
+    );
+  }
+
+  return JSON.parse(
+    fs.readFileSync(configPath, 'utf8')
+  );
+}
+
+// ==================== WINDOW ====================
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -16,123 +126,166 @@ function createWindow() {
       contextIsolation: true
     }
   });
-  mainWindow.loadFile('index.html');
+
+  mainWindow.loadFile('login.html');
 }
 
 app.whenReady().then(() => {
   createWindow();
+
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow();
+    }
   });
 });
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
+  if (process.platform !== 'darwin') {
+    app.quit();
+  }
 });
 
-// ==================== IPC ====================
+// ==================== CONFIG ====================
 
 ipcMain.handle('get-config', () => {
-  const configPath = path.join(__dirname, 'config/config.json');
-  return JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  return getConfig();
 });
 
-// Открытие базы
+// ==================== DATABASE ====================
+
 ipcMain.handle('open-db', () => {
-  return new Promise((resolve) => {
-    const config = JSON.parse(fs.readFileSync(path.join(__dirname, 'config/config.json'), 'utf8'));
-    const dbPath = path.join(__dirname, config.database);
-    db = new sqlite3.Database(dbPath, (err) => {
-      if (err) {
-        resolve({ success: false, error: err.message });
-      } else {
-        resolve({ success: true });
-      }
-    });
-  });
+  try {
+
+    const config = getConfig();
+
+    const dbPath = config.database;
+
+    if (!dbPath) {
+      return {
+        success: false,
+        error: 'Поле database не указано'
+      };
+    }
+
+    if (!fs.existsSync(dbPath)) {
+      return {
+        success: false,
+        error: `База не найдена:\n${dbPath}`
+      };
+    }
+
+    db = new Database(dbPath);
+
+    return {
+      success: true
+    };
+
+  } catch (err) {
+    return {
+      success: false,
+      error: err.message
+    };
+  }
 });
 
-// Выполнение запроса
-ipcMain.handle('execute-query', (event, sql, params) => {
-  return new Promise((resolve) => {
-    db.all(sql, params, (err, rows) => {
-      if (err) {
-        resolve({ success: false, error: err.message });
-      } else {
-        resolve({ success: true, rows });
-      }
-    });
-  });
-});
+// ==================== QUERY ====================
 
-// Экспорт
-ipcMain.handle('export-csv', async (event, data, filename) => {
+ipcMain.handle('execute-query', (event, sql, params = []) => {
+  try {
+    if (!db) {
+      return {
+        success: false,
+        error: 'DB not opened'
+      };
+    }
+
+    const stmt = db.prepare(sql);
+    const isSelect = sql.trim().toLowerCase().startsWith('select');
+
+    if (isSelect) {
+      const rows = stmt.all(params);
+      return {
+        success: true,
+        rows
+      };
+    }
+
+    const result = stmt.run(params);
+
+    return {
+      success: true,
+      result
+    };
+
+  } catch (err) {
+    return {
+      success: false,
+      error: err.message
+    };
+  }
+});
+// ==================== LOOKUP ====================
+
+ipcMain.handle('get-lookup-data', (event, sql) => {
+
+  try {
+
+    if (!db) {
+      return [];
+    }
+
+    return db.prepare(sql).all();
+
+  } catch (err) {
+
+    console.error(err);
+
+    return [];
+
+  }
+
+});
+// ==================== CSV EXPORT ====================
+
+ipcMain.handle('export-csv', (event, data, filename) => {
   const Papa = require('papaparse');
+
   const csv = Papa.unparse(data);
-  const exportPath = path.join(__dirname, 'exports', filename);
+
+  const exportPath = path.join(EXPORT_DIR, filename);
+
   fs.writeFileSync(exportPath, csv);
+
   return exportPath;
 });
 
-// Экспорт XLSX — Красивый
-ipcMain.handle('export-xlsx', async (event, data, filename) => {
-  const exportDir = path.join(__dirname, 'exports');
-  
-  if (!fs.existsSync(exportDir)) {
-    fs.mkdirSync(exportDir, { recursive: true });
-  }
+// ==================== XLSX EXPORT ====================
 
+ipcMain.handle('export-xlsx', (event, data, filename) => {
   const XLSX = require('xlsx');
-  
-  // Создаём книгу и лист
+
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.json_to_sheet(data);
 
-  // === Красивое форматирование ===
-  
-  // Делаем заголовки жирными и с цветом
-  const range = XLSX.utils.decode_range(ws['!ref']);
-  
-  for (let C = range.s.c; C <= range.e.c; ++C) {
-    const address = XLSX.utils.encode_cell({ r: 0, c: C });
-    if (!ws[address]) continue;
-    
-    ws[address].s = {
-      font: { bold: true, color: { rgb: "FFFFFF" } },
-      fill: { fgColor: { rgb: "1E40AF" } },   // синий фон
-      alignment: { horizontal: "center", vertical: "center" }
-    };
-  }
+  const cols = Object.keys(data[0] || {}).map(key => ({
+    wch: Math.min(Math.max(key.length, 10), 50)
+  }));
 
-  // Автоматическая ширина колонок
-  const colWidths = [];
-  const headers = Object.keys(data[0] || {});
-  
-  headers.forEach((header, i) => {
-    let maxWidth = header.length;
-    
-    data.forEach(row => {
-      const value = row[header] ? String(row[header]).length : 0;
-      if (value > maxWidth) maxWidth = value;
-    });
-    
-    colWidths.push({ wch: Math.min(maxWidth + 4, 50) }); // максимум 50 символов
-  });
-  
-  ws['!cols'] = colWidths;
+  ws['!cols'] = cols;
 
-  // Добавляем лист
-  XLSX.utils.book_append_sheet(wb, ws, "Данные");
+  XLSX.utils.book_append_sheet(wb, ws, 'Data');
 
-  const exportPath = path.join(exportDir, filename);
+  const exportPath = path.join(EXPORT_DIR, filename);
+
   XLSX.writeFile(wb, exportPath);
-  
-  console.log(`✅ Красивый XLSX сохранён: ${exportPath}`);
+
   return exportPath;
 });
 
-// === ОТДЕЛЬНОЕ ОКНО ДЕТАЛЕЙ ===
-ipcMain.handle('show-details', (event, title, data, windowConfig) => {
+// ==================== DETAILS WINDOW ====================
+
+ipcMain.handle('show-details', (event, title, row, config) => {
   const detailWindow = new BrowserWindow({
     width: 820,
     height: 680,
@@ -140,66 +293,98 @@ ipcMain.handle('show-details', (event, title, data, windowConfig) => {
     modal: true,
     resizable: true,
     backgroundColor: '#0f172a',
-    webPreferences: { nodeIntegration: false, contextIsolation: true }
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true
+    }
   });
 
   const html = `
-    <html>
-      <head>
-        <meta charset="UTF-8">
-        <style>
-          body { 
-            font-family: 'Segoe UI', system-ui, sans-serif; 
-            background: #0f172a; 
-            color: #e2e8f0; 
-            padding: 30px; 
-            margin: 0;
-          }
-          h2 { color: #67e8f9; border-bottom: 2px solid #22d3ee; padding-bottom: 15px; }
-          .detail { 
-            background: #1e2937; 
-            margin: 12px 0; 
-            padding: 16px 20px; 
-            border-radius: 12px; 
-            border: 1px solid #334155;
-          }
-          .label { 
-            display: inline-block; 
-            width: 280px; 
-            color: #94a3b8; 
-            font-weight: 500;
-          }
-        </style>
-      </head>
-      <body>
-        <h2>${title}</h2>
-        <div id="content"></div>
+  <!DOCTYPE html>
+  <html>
+  <head>
+    <meta charset="UTF-8">
+    <title>${title}</title>
+    <style>
+      body {
+        font-family: Segoe UI, sans-serif;
+        background: #0f172a;
+        color: #e2e8f0;
+        padding: 30px;
+        margin: 0;
+      }
 
-        <script>
-          const row = ${JSON.stringify(data)};
-          const config = ${JSON.stringify(windowConfig)};
-          const container = document.getElementById('content');
+      h2 {
+        color: #67e8f9;
+        border-bottom: 2px solid #22d3ee;
+        padding-bottom: 10px;
+      }
 
-          if (config && config.details) {
-            config.details.forEach(item => {
-              const div = document.createElement('div');
-              div.className = 'detail';
-              const value = row[item.field] !== undefined ? row[item.field] : 
-                           row[item.field.toUpperCase()] || '—';
-              div.innerHTML = '<span class="label">' + item.title + ':</span> ' + value;
-              container.appendChild(div);
-            });
-          } else {
-            Object.keys(row).forEach(key => {
-              const div = document.createElement('div');
-              div.className = 'detail';
-              div.innerHTML = '<span class="label">' + key + ':</span> ' + (row[key] || '—');
-              container.appendChild(div);
-            });
-          }
-        </script>
-      </body>
-    </html>`;
+      .detail {
+        background: #1e2937;
+        margin: 10px 0;
+        padding: 12px 16px;
+        border-radius: 10px;
+        border: 1px solid #334155;
+      }
 
-  detailWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+      .label {
+        display: inline-block;
+        width: 260px;
+        color: #94a3b8;
+      }
+    </style>
+  </head>
+
+  <body>
+    <h2>${title}</h2>
+    <div id="content"></div>
+
+    <script>
+      const row = ${JSON.stringify(row)};
+      const config = ${JSON.stringify(config)};
+      const container = document.getElementById('content');
+
+      if (config && config.details) {
+        config.details.forEach(item => {
+          const div = document.createElement('div');
+          div.className = 'detail';
+
+          const value =
+            row[item.field] ??
+            row[item.field?.toUpperCase()] ??
+            '—';
+
+          div.innerHTML =
+            '<span class="label">' +
+            item.title +
+            ':</span>' +
+            value;
+
+          container.appendChild(div);
+        });
+      } else {
+        Object.keys(row).forEach(key => {
+          const div = document.createElement('div');
+          div.className = 'detail';
+
+          div.innerHTML =
+            '<span class="label">' +
+            key +
+            ':</span>' +
+            (row[key] ?? '—');
+
+          container.appendChild(div);
+        });
+      }
+    </script>
+  </body>
+  </html>
+  `;
+
+  detailWindow.loadURL(
+    'data:text/html;charset=utf-8,' +
+    encodeURIComponent(html)
+  );
 });
+

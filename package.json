@@ -1,18 +1,38 @@
 {
-  "name": "gterminalpro",
+  "name": "GTerminalPro",
   "version": "1.0.0",
+  "description": "Универсальный GUI для SQLite",
   "main": "main.js",
+  "author": "Your Name",
+  "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder --win --x64"
+    "build": "electron-builder --win portable"
+  },
+  "build": {
+    "appId": "com.gterminalpro.app",
+    "productName": "GTerminalPro",
+    "win": {
+      "target": "portable",
+      "icon": "icon.ico"
+    },
+    "files": [
+      "**/*",
+      "!exports/**",
+      "!*.db"
+    ],
+    "directories": {
+      "output": "dist"
+    }
   },
   "dependencies": {
-    "electron": "^30.5.1",
-    "sqlite3": "^5.1.7",
+    "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^12.11.1",
     "papaparse": "^5.4.1",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
-    "electron-builder": "^25.1.8"
+    "electron": "^30.0.0",
+    "electron-builder": "^24.13.3"
   }
 }

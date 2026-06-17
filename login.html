@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+
+<html>
+
+<head>
+
+<meta charset="UTF-8">
+
+<title>GTerminalPro Login</title>
+
+<script src="https://cdn.tailwindcss.com"></script>
+
+</head>
+
+<body class="bg-slate-900 flex items-center justify-center h-screen">
+
+<div class="bg-slate-800 p-8 rounded-3xl w-96 border border-slate-700 shadow-2xl">
+
+<h1 class="text-2xl font-bold text-cyan-400 mb-6 text-center">GTerminalPro</h1>
+
+<div class="mb-4">
+
+<label class="block text-slate-400 mb-2">Логин</label>
+
+<input id="login" type="text"
+
+class="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white outline-none focus:border-cyan-400">
+
+</div>
+
+<div class="mb-6">
+
+<label class="block text-slate-400 mb-2">Пароль</label>
+
+<input id="password" type="password"
+
+class="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white outline-none focus:border-cyan-400">
+
+</div>
+
+<button onclick="login()"
+
+class="w-full bg-cyan-500 hover:bg-cyan-600 text-black font-semibold py-3 rounded-xl transition">
+
+Войти
+
+</button>
+
+<p id="error" class="text-red-400 text-sm mt-4 text-center hidden">
+
+Неверный логин или пароль
+
+</p>
+
+</div>
+
+<script>
+
+async function login() {
+
+const loginValue = document.getElementById('login').value;
+
+const passwordValue = document.getElementById('password').value;
+
+const result = await window.electronAPI.login(loginValue, passwordValue);
+
+if (result.success) {
+
+    localStorage.setItem(
+        'currentUser',
+        JSON.stringify(result.user)
+    );
+
+    window.location.href = 'index.html';
+
+} else {
+
+    document.getElementById('error')
+        .classList.remove('hidden');
+}
+
+}
+console.log(result);
+</script>
+
+</body>
+
+</html>

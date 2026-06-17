@@ -1,0 +1,91 @@
+{
+  "title": "GTerminalPro",
+  "database": "D:/Program/GterminalPro/GterminalPro/data/database.db",
+  "windows": [
+    {
+      "id": "merchants",
+	  "windowId": 1,
+      "title": "Мерчанты",
+	    "insert": {
+		  "table": "MERCHANTS",
+		  "fields": [
+			{
+			  "field": "TID",
+			  "title": "TID",
+			  "type": "text"
+			},
+			{
+			  "field": "ISS_",
+			  "title": "ISSUER",
+			  "type": "select",
+			  "lookupQuery": "select distinct(ISS_) from CURR_TRANS "
+			}
+		  ]
+		},
+
+		"update": {
+			"table": "MERCHANTS",
+			"keyField": "TID",
+			"fields": [
+			  {
+				"field": "MID",
+				"title": "MID",
+				"type": "text"
+			  },
+			  {
+				"field": "SERIAL_NUMBER",
+				"title": "SERIAL_NUMBER",
+				"type": "text"
+			  },
+			  {
+				"field": "LEGAL_NAME",
+				"title": "LEGAL_NAME",
+				"type": "text"
+			  }
+			]
+		  },
+
+		"delete": {
+			"table": "MERCHANTS",
+			"keyField": "TID"
+		  },
+      "filters": [],
+      "query": "SELECT TID, MID, SERIAL_NUMBER, LEGAL_NAME, LEGAL_NAME_AM FROM MERCHANTS",
+      "grid": [
+        { "field": "TID", "title": "TIDссс" },
+        { "field": "MID", "title": "MID" },
+        { "field": "SERIAL_NUMBER", "title": "Серийный номер" }
+      ],
+      "details": [
+        { "field": "LEGAL_NAME", "title": "Юридическое название" },
+        { "field": "LEGAL_NAME_AM", "title": "Юридическое название (AM)" },
+        { "field": "TID", "title": "TID" },
+        { "field": "MID", "title": "MID" }
+      ]
+    },
+    {
+      "id": "transactions",
+	  "windowId": 2,
+      "title": "Транзакции",
+      "filters": [
+        { "field": "POS_TERMINAL_ID", "title": "POS_TERMINAL_ID" },
+        { "field": "POS_MERCHANT_ID", "title": "POS Merchant ID" },
+        { "field": "CARD_NUMBER", "title": "Номер карты" }
+      ],
+      "query": "SELECT POS_TERMINAL_ID, POS_MERCHANT_ID, CARD_NUMBER, TR_AMOUNT, TR_CURRENCY, TR_UTRNNO, TR_DATE, TR_TYPE, TR_SV_RESP, REFNUM, SV_TRACE FROM CURR_TRANS",
+      "grid": [
+        { "field": "POS_TERMINAL_ID", "title": "POS Terminal ID" },
+        { "field": "POS_MERCHANT_ID", "title": "POS Merchant ID" },
+        { "field": "CARD_NUMBER", "title": "Номер карты" },
+        { "field": "TR_AMOUNT", "title": "Сумма" },
+        { "field": "TR_CURRENCY", "title": "Валюта" }
+      ],
+      "details": [
+        { "field": "TR_TYPE", "title": "Тип транзакции" },
+        { "field": "TR_SV_RESP", "title": "Ответ системы" },
+        { "field": "REFNUM", "title": "Ref Number" },
+        { "field": "SV_TRACE", "title": "SV Trace" }
+      ]
+    }
+  ]
+}
