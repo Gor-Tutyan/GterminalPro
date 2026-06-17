@@ -387,4 +387,30 @@ ipcMain.handle('show-details', (event, title, row, config) => {
     encodeURIComponent(html)
   );
 });
+ipcMain.handle(
+    'load-config',
+    () => getConfig()
+);
 
+ipcMain.handle(
+    'save-config',
+    (event, config) => {
+
+        const configPath =
+            path.join(
+                APP_DIR,
+                'config.json'
+            );
+
+        fs.writeFileSync(
+            configPath,
+            JSON.stringify(
+                config,
+                null,
+                2
+            )
+        );
+
+        return true;
+    }
+);

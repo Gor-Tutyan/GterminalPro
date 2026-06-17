@@ -7,6 +7,8 @@ let currentUser = null;
 const ROWS_PER_PAGE = 21;
 let selectedRow = null;
 let selectedTr = null;
+let selectedAdminWindow = null;
+
 
 async function init() {
 
@@ -67,7 +69,36 @@ config.windows.forEach((win, index) => {
 
   list.appendChild(btn);
 });
+if (user.role === 'ADMIN') {
 
+    const adminBtn =
+        document.createElement('button');
+
+    adminBtn.className =
+        'window-item w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 transition-all';
+
+    adminBtn.innerHTML = `
+        <i class="fas fa-cog text-yellow-400"></i>
+        <span class="font-medium">
+            Администрирование
+        </span>
+    `;
+
+    adminBtn.onclick = () => {
+
+        document
+            .querySelectorAll('.window-item')
+            .forEach(b =>
+                b.classList.remove('active')
+            );
+
+        adminBtn.classList.add('active');
+
+        openAdminWindow();
+    };
+
+    list.appendChild(adminBtn);
+}
     const visibleWindows = config.windows.filter(
     (win, index) =>
         allowedWindows.includes(index + 1)
@@ -896,5 +927,1111 @@ async function saveInsert(win) {
         alert(result.error);
 
     }
+}
+async function openAdminWindow() {
+
+    const config =
+        await window.electronAPI.loadConfig();
+
+    const container =
+        document.getElementById(
+            'current-window'
+        );
+
+    let html = `
+        <div class="p-6">
+
+            <h2 class="text-2xl font-bold text-yellow-400 mb-6">
+                ⚙ Администрирование
+            </h2>
+
+            <div class="grid grid-cols-3 gap-6">
+
+                <div
+                    class="bg-slate-800 rounded-xl p-4"
+                >
+
+                    <div class="font-bold mb-4">
+                        Окна
+                    </div>
+    `;
+
+    config.windows.forEach((win, index) => {
+
+        html += `
+            <button
+                onclick="editWindow(${index})"
+                class="
+                    block
+                    w-full
+                    text-left
+                    bg-slate-700
+                    hover:bg-slate-600
+                    rounded-lg
+                    px-3
+                    py-2
+                    mb-2
+                "
+            >
+                ${win.title}
+            </button>
+        `;
+    });
+
+    html += `
+
+                    <button
+                        onclick="createWindowConfig()"
+                        class="
+                            w-full
+                            bg-emerald-600
+                            mt-4
+                            px-3
+                            py-2
+                            rounded-lg
+                        "
+                    >
+                        + Новое окно
+                    </button>
+
+                </div>
+
+                <div
+                id="admin-editor"
+                class="
+                    col-span-2
+                    bg-slate-800
+                    rounded-xl
+                    p-4
+                    overflow-auto
+                "
+                style="
+                    max-height: calc(100vh - 180px);
+                "
+                >
+                    Выберите окно
+                </div>
+
+            </div>
+
+        </div>
+    `;
+
+    container.innerHTML = html;
+
+    window.adminConfig = config;
+}
+
+function openConfigEditor() {
+
+    alert(
+        'Редактор конфигурации будет следующим шагом'
+    );
+
+}
+function editWindow(index) {
+
+    selectedAdminWindow = index;
+
+    const win =
+        window.adminConfig.windows[index];
+
+    document.getElementById(
+        'admin-editor'
+    ).innerHTML = `
+
+        <div class="space-y-4">
+
+            <h3 class="text-xl font-bold text-cyan-400">
+                ${win.title}
+            </h3>
+
+            <div>
+
+                <label>
+                    Название
+                </label>
+
+                <input
+                    id="cfg_title"
+                    value="${win.title || ''}"
+                    class="
+                        w-full
+                        bg-slate-700
+                        rounded
+                        p-2
+                    "
+                >
+
+            </div>
+
+            <div>
+
+                <label>
+                    ID
+                </label>
+
+                <input
+                    id="cfg_id"
+                    value="${win.id || ''}"
+                    class="
+                        w-full
+                        bg-slate-700
+                        rounded
+                        p-2
+                    "
+                >
+
+            </div>
+
+            <div>
+
+                <label>
+                    Номер окна
+                </label>
+
+                <input
+                    id="cfg_windowId"
+                    value="${win.windowId || ''}"
+                    class="
+                        w-full
+                        bg-slate-700
+                        rounded
+                        p-2
+                    "
+                >
+
+            </div>
+
+            <div>
+
+                <label>
+                    SQL запрос
+                </label>
+                <div class="flex gap-2 mt-4">
+
+                    <button
+                        onclick="showGridEditor()"
+                        class="bg-slate-600 px-3 py-2 rounded"
+                    >
+                        Grid
+                    </button>
+
+                    <button
+                        onclick="showFiltersEditor()"
+                        class="bg-slate-600 px-3 py-2 rounded"
+                    >
+                        Filters
+                    </button>
+
+                    <button
+                        onclick="showDetailsEditor()"
+                        class="bg-slate-600 px-3 py-2 rounded"
+                    >
+                        Details
+                    </button>
+
+                    <button
+                        onclick="showInsertEditor()"
+                        class="bg-slate-600 px-3 py-2 rounded"
+                    >
+                        Insert
+                    </button>
+
+                    <button
+                        onclick="showUpdateEditor()"
+                        class="bg-slate-600 px-3 py-2 rounded"
+                    >
+                        Update
+                    </button>
+
+                    <button
+                        onclick="showDeleteEditor()"
+                        class="bg-slate-600 px-3 py-2 rounded"
+                    >
+                        Delete
+                    </button>
+
+                </div>
+
+                <div
+                    id="config-section"
+                    class="
+                        mt-4
+                        bg-slate-900
+                        rounded-xl
+                        p-4
+                    "
+                ></div>
+                <textarea
+                    id="cfg_query"
+                    class="
+                        w-full
+                        h-48
+                        bg-slate-700
+                        rounded
+                        p-2
+                    "
+                >${win.query || ''}</textarea>
+
+                      </div>
+
+                      <div
+              style="
+                  position:sticky;
+                  bottom:0;
+                  background:#1e293b;
+                  padding:15px;
+                  margin-top:20px;
+                  border-top:1px solid #334155;
+              "
+          >
+
+              <button
+                  onclick="saveWindowConfig()"
+                  class="
+                      bg-cyan-600
+                      hover:bg-cyan-500
+                      px-4
+                      py-2
+                      rounded
+                  "
+              >
+                  Сохранить
+              </button>
+
+          </div>
+
+        </div>
+    `;
+}
+async function saveWindowConfig() {
+
+    if (selectedAdminWindow === null) {
+        return;
+    }
+
+    const win =
+        window.adminConfig
+            .windows[selectedAdminWindow];
+
+    win.title =
+        document.getElementById(
+            'cfg_title'
+        ).value;
+
+    win.id =
+        document.getElementById(
+            'cfg_id'
+        ).value;
+
+    win.windowId =
+        Number(
+            document.getElementById(
+                'cfg_windowId'
+            ).value
+        );
+
+    win.query =
+        document.getElementById(
+            'cfg_query'
+        ).value;
+
+    await window.electronAPI
+        .saveConfig(
+            window.adminConfig
+        );
+
+    alert(
+        'Конфигурация сохранена'
+    );
+
+    openAdminWindow();
+}
+
+function showGridEditor() {
+
+    const win =
+        window.adminConfig
+            .windows[selectedAdminWindow];
+
+    let html = `
+        <h3 class="text-cyan-400 mb-4">
+            Grid
+        </h3>
+    `;
+
+    (win.grid || []).forEach(
+        (item, index) => {
+
+            html += `
+
+                <div
+                    class="
+                        flex
+                        justify-between
+                        items-center
+                        bg-slate-800
+                        p-3
+                        rounded
+                        mb-2
+                    "
+                >
+
+                    <div>
+
+                        ${item.field}
+                        →
+                        ${item.title}
+
+                    </div>
+
+                    <button
+                        onclick="
+                            deleteGridColumn(${index})
+                        "
+                        class="
+                            bg-red-600
+                            px-2
+                            py-1
+                            rounded
+                        "
+                    >
+                        X
+                    </button>
+
+                </div>
+
+            `;
+        }
+    );
+
+    html += `
+
+        <button
+            onclick="addGridColumn()"
+            class="
+                bg-emerald-600
+                px-4
+                py-2
+                rounded
+                mt-3
+            "
+        >
+            Добавить колонку
+        </button>
+
+    `;
+
+    document.getElementById(
+        'config-section'
+    ).innerHTML = html;
+}
+function addGridColumn() {
+
+    document.getElementById(
+        'config-section'
+    ).innerHTML += `
+
+        <div
+            id="new-grid-form"
+            class="
+                bg-slate-800
+                p-4
+                rounded
+                mt-4
+            "
+        >
+
+            <input
+                id="newGridField"
+                placeholder="Имя поля"
+                class="
+                    w-full
+                    bg-slate-700
+                    p-2
+                    rounded
+                    mb-2
+                "
+            >
+
+            <input
+                id="newGridTitle"
+                placeholder="Заголовок"
+                class="
+                    w-full
+                    bg-slate-700
+                    p-2
+                    rounded
+                    mb-2
+                "
+            >
+
+            <button
+                onclick="saveNewGridColumn()"
+                class="
+                    bg-emerald-600
+                    px-4
+                    py-2
+                    rounded
+                "
+            >
+                Добавить
+            </button>
+
+        </div>
+    `;
+}
+function saveNewGridColumn() {
+
+    const field =
+        document.getElementById(
+            'newGridField'
+        ).value;
+
+    const title =
+        document.getElementById(
+            'newGridTitle'
+        ).value;
+
+    if (!field) {
+
+        alert(
+            'Введите имя поля'
+        );
+
+        return;
+    }
+
+    const win =
+        window.adminConfig
+            .windows[selectedAdminWindow];
+
+    if (!win.grid) {
+        win.grid = [];
+    }
+
+    win.grid.push({
+
+        field,
+
+        title:
+            title || field
+
+    });
+
+    showGridEditor();
+}
+function deleteGridColumn(index) {
+
+    const win =
+        window.adminConfig
+            .windows[selectedAdminWindow];
+
+    win.grid.splice(
+        index,
+        1
+    );
+
+    showGridEditor();
+}
+function showFiltersEditor() {
+
+    const win =
+        window.adminConfig
+            .windows[selectedAdminWindow];
+
+    let html = `
+        <h3 class="text-cyan-400 mb-4">
+            Filters
+        </h3>
+    `;
+
+    (win.filters || []).forEach(
+        (item, index) => {
+
+            html += `
+                <div
+                    class="
+                        flex
+                        justify-between
+                        items-center
+                        bg-slate-800
+                        p-3
+                        rounded
+                        mb-2
+                    "
+                >
+
+                    <div>
+
+                        ${item.field}
+                        →
+                        ${item.title}
+
+                    </div>
+
+                    <button
+                        onclick="
+                            deleteFilter(${index})
+                        "
+                        class="
+                            bg-red-600
+                            px-2
+                            py-1
+                            rounded
+                        "
+                    >
+                        X
+                    </button>
+
+                </div>
+            `;
+        }
+    );
+
+    html += `
+
+        <button
+            onclick="addFilter()"
+            class="
+                bg-emerald-600
+                px-4
+                py-2
+                rounded
+                mt-3
+            "
+        >
+            Добавить фильтр
+        </button>
+
+    `;
+
+    document.getElementById(
+        'config-section'
+    ).innerHTML = html;
+}
+function addFilter() {
+
+    document.getElementById(
+        'config-section'
+    ).innerHTML += `
+
+        <div
+            class="
+                bg-slate-800
+                p-4
+                rounded
+                mt-4
+            "
+        >
+
+            <input
+                id="newFilterField"
+                placeholder="Имя поля"
+                class="
+                    w-full
+                    bg-slate-700
+                    p-2
+                    rounded
+                    mb-2
+                "
+            >
+
+            <input
+                id="newFilterTitle"
+                placeholder="Заголовок"
+                class="
+                    w-full
+                    bg-slate-700
+                    p-2
+                    rounded
+                    mb-2
+                "
+            >
+
+            <button
+                onclick="saveFilter()"
+                class="
+                    bg-emerald-600
+                    px-4
+                    py-2
+                    rounded
+                "
+            >
+                Добавить
+            </button>
+
+        </div>
+    `;
+}
+function saveFilter() {
+
+    const field =
+        document.getElementById(
+            'newFilterField'
+        ).value;
+
+    const title =
+        document.getElementById(
+            'newFilterTitle'
+        ).value;
+
+    if (!field) {
+
+        alert(
+            'Введите имя поля'
+        );
+
+        return;
+    }
+
+    const win =
+        window.adminConfig
+            .windows[selectedAdminWindow];
+
+    if (!win.filters) {
+        win.filters = [];
+    }
+
+    win.filters.push({
+
+        field,
+
+        title:
+            title || field
+
+    });
+
+    showFiltersEditor();
+}
+function deleteFilter(index) {
+
+    const win =
+        window.adminConfig
+            .windows[selectedAdminWindow];
+
+    win.filters.splice(
+        index,
+        1
+    );
+
+    showFiltersEditor();
+}
+
+function showDetailsEditor() {
+
+    const win =
+        window.adminConfig
+            .windows[selectedAdminWindow];
+
+    let html = `
+        <h3 class="text-cyan-400 mb-4">
+            Details
+        </h3>
+    `;
+
+    (win.details || []).forEach(
+        (item, index) => {
+
+            html += `
+                <div
+                    class="
+                        flex
+                        justify-between
+                        items-center
+                        bg-slate-800
+                        p-3
+                        rounded
+                        mb-2
+                    "
+                >
+
+                    <div>
+
+                        ${item.field}
+                        →
+                        ${item.title}
+
+                    </div>
+
+                    <button
+                        onclick="
+                            deleteDetail(${index})
+                        "
+                        class="
+                            bg-red-600
+                            px-2
+                            py-1
+                            rounded
+                        "
+                    >
+                        X
+                    </button>
+
+                </div>
+            `;
+        }
+    );
+
+    html += `
+
+        <button
+            onclick="addDetail()"
+            class="
+                bg-emerald-600
+                px-4
+                py-2
+                rounded
+                mt-3
+            "
+        >
+            Добавить поле
+        </button>
+
+    `;
+
+    document.getElementById(
+        'config-section'
+    ).innerHTML = html;
+}
+function addDetail() {
+
+    document.getElementById(
+        'config-section'
+    ).innerHTML += `
+
+        <div
+            class="
+                bg-slate-800
+                p-4
+                rounded
+                mt-4
+            "
+        >
+
+            <input
+                id="newDetailField"
+                placeholder="Имя поля"
+                class="
+                    w-full
+                    bg-slate-700
+                    p-2
+                    rounded
+                    mb-2
+                "
+            >
+
+            <input
+                id="newDetailTitle"
+                placeholder="Заголовок"
+                class="
+                    w-full
+                    bg-slate-700
+                    p-2
+                    rounded
+                    mb-2
+                "
+            >
+
+            <button
+                onclick="saveDetail()"
+                class="
+                    bg-emerald-600
+                    px-4
+                    py-2
+                    rounded
+                "
+            >
+                Добавить
+            </button>
+
+        </div>
+    `;
+}
+function saveDetail() {
+
+    const field =
+        document.getElementById(
+            'newDetailField'
+        ).value;
+
+    const title =
+        document.getElementById(
+            'newDetailTitle'
+        ).value;
+
+    if (!field) {
+
+        alert(
+            'Введите имя поля'
+        );
+
+        return;
+    }
+
+    const win =
+        window.adminConfig
+            .windows[selectedAdminWindow];
+
+    if (!win.details) {
+        win.details = [];
+    }
+
+    win.details.push({
+
+        field,
+
+        title:
+            title || field
+
+    });
+
+    showDetailsEditor();
+}
+function deleteDetail(index) {
+
+    const win =
+        window.adminConfig
+            .windows[selectedAdminWindow];
+
+    win.details.splice(
+        index,
+        1
+    );
+
+    showDetailsEditor();
+}
+
+function showInsertEditor() {
+
+    const win =
+        window.adminConfig
+            .windows[selectedAdminWindow];
+
+    let html = `
+        <h3 class="text-cyan-400 mb-4">
+            Insert
+        </h3>
+    `;
+
+    (win.insert?.fields || []).forEach(
+        (item, index) => {
+
+            html += `
+                <div
+                    class="
+                        bg-slate-800
+                        p-3
+                        rounded
+                        mb-2
+                    "
+                >
+
+                    <div>
+                        <b>${item.field}</b>
+                    </div>
+
+                    <div>
+                        ${item.title}
+                    </div>
+
+                    <div>
+                        type:
+                        ${item.type || 'text'}
+                    </div>
+
+                    <button
+                        onclick="
+                            deleteInsertField(${index})
+                        "
+                        class="
+                            bg-red-600
+                            px-2
+                            py-1
+                            rounded
+                            mt-2
+                        "
+                    >
+                        Удалить
+                    </button>
+
+                </div>
+            `;
+        }
+    );
+
+    html += `
+
+        <button
+            onclick="addInsertField()"
+            class="
+                bg-emerald-600
+                px-4
+                py-2
+                rounded
+                mt-3
+            "
+        >
+            Добавить поле
+        </button>
+
+    `;
+
+    document.getElementById(
+        'config-section'
+    ).innerHTML = html;
+}
+function addInsertField() {
+
+    document.getElementById(
+        'config-section'
+    ).innerHTML += `
+
+        <div
+            class="
+                bg-slate-900
+                p-4
+                rounded
+                mt-4
+            "
+        >
+
+            <input
+                id="ins_field"
+                placeholder="Имя поля"
+                class="
+                    w-full
+                    bg-slate-700
+                    p-2
+                    rounded
+                    mb-2
+                "
+            >
+
+            <input
+                id="ins_title"
+                placeholder="Заголовок"
+                class="
+                    w-full
+                    bg-slate-700
+                    p-2
+                    rounded
+                    mb-2
+                "
+            >
+
+            <select
+                id="ins_type"
+                class="
+                    w-full
+                    bg-slate-700
+                    p-2
+                    rounded
+                    mb-2
+                "
+            >
+
+                <option value="text">Text</option>
+                <option value="number">Number</option>
+                <option value="date">Date</option>
+                <option value="datetime">DateTime</option>
+                <option value="checkbox">Checkbox</option>
+                <option value="textarea">Textarea</option>
+                <option value="password">Password</option>
+                <option value="email">Email</option>
+                <option value="select">Select</option>
+
+            </select>
+
+            <input
+                id="ins_lookup"
+                placeholder="lookupQuery"
+                class="
+                    w-full
+                    bg-slate-700
+                    p-2
+                    rounded
+                    mb-2
+                "
+            >
+
+            <button
+                onclick="saveInsertField()"
+                class="
+                    bg-emerald-600
+                    px-4
+                    py-2
+                    rounded
+                "
+            >
+                Сохранить
+            </button>
+
+        </div>
+    `;
+}
+function saveInsertField() {
+
+    const win =
+        window.adminConfig
+            .windows[selectedAdminWindow];
+
+    if (!win.insert) {
+
+        win.insert = {
+            table: '',
+            fields: []
+        };
+    }
+
+    win.insert.fields.push({
+
+        field:
+            document.getElementById(
+                'ins_field'
+            ).value,
+
+        title:
+            document.getElementById(
+                'ins_title'
+            ).value,
+
+        type:
+            document.getElementById(
+                'ins_type'
+            ).value,
+
+        lookupQuery:
+            document.getElementById(
+                'ins_lookup'
+            ).value
+
+    });
+
+    showInsertEditor();
+}
+function deleteInsertField(index) {
+
+    const win =
+        window.adminConfig
+            .windows[selectedAdminWindow];
+
+    win.insert.fields.splice(
+        index,
+        1
+    );
+
+    showInsertEditor();
+}
+
+function showUpdateEditor() {
+
+    alert('Update');
+}
+
+function showDeleteEditor() {
+
+    alert('Delete');
 }
 window.onload = init;

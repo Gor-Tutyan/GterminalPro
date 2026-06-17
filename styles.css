@@ -192,3 +192,16 @@ th, td {
 .min-w-max {
   min-width: max-content;
 }
+/* Администрирование */
+
+#admin-editor {
+    max-height: calc(100vh - 150px);
+    overflow-y: auto;
+    overflow-x: auto;
+}
+
+#config-section {
+    max-height: 500px;
+    overflow-y: auto;
+    overflow-x: auto;
+}
