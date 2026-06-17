@@ -1,0 +1,9 @@
+node_modules/
+*.db
+exports/
+.DS_Store
+Thumbs.db
+*.log
+dist/
+build/
+electron/dist/

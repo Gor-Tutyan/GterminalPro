@@ -1,0 +1,194 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  --accent: #22d3ee;
+}
+
+body {
+  font-family: 'Inter', system-ui, sans-serif;
+}
+
+.font-mono {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Sidebar */
+.sidebar {
+  background: linear-gradient(180deg, #0f172a 0%, #020617 100%);
+  border-right: 1px solid rgba(34, 211, 238, 0.15);
+  box-shadow: 4px 0 20px -5px rgba(0, 0, 0, 0.5);
+}
+
+/* Окна в сайдбаре */
+.window-list .window-item {
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.window-list .window-item:hover {
+  transform: translateX(6px);
+  background-color: rgba(34, 211, 238, 0.1);
+}
+
+.window-list .window-item.active {
+  background: linear-gradient(90deg, rgba(34, 211, 238, 0.2), transparent);
+  border-left: 3px solid var(--accent);
+  color: white;
+}
+
+/* Таблицы */
+table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+th {
+  background: rgba(15, 23, 42, 0.95);
+  color: #67e8f9;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+tr {
+  transition: all 0.2s ease;
+}
+
+tr:hover {
+  background: rgba(103, 232, 249, 0.08) !important;
+  transform: scale(1.01);
+}
+
+/* Окно с деталями */
+.detail-window {
+  background: linear-gradient(145deg, #1e2937, #0f172a);
+  border: 1px solid rgba(103, 232, 249, 0.2);
+  box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.4);
+}
+
+/* Анимации */
+.glass {
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* Кастомный скролл */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #0f172a;
+}
+::-webkit-scrollbar-thumb {
+  background: #22d3ee;
+  border-radius: 20px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #67e8f9;
+}
+/* Улучшенный скролл для таблиц */
+.overflow-x-auto {
+  scrollbar-height: thin;
+  scrollbar-color: #22d3ee #334155;
+}
+
+.overflow-x-auto::-webkit-scrollbar {
+  height: 8px;
+}
+
+.overflow-x-auto::-webkit-scrollbar-track {
+  background: #1e2937;
+  border-radius: 10px;
+}
+
+.overflow-x-auto::-webkit-scrollbar-thumb {
+  background: #22d3ee;
+  border-radius: 10px;
+}
+
+.overflow-x-auto::-webkit-scrollbar-thumb:hover {
+  background: #67e8f9;
+}
+
+/* Чтобы таблица не сжималась */
+table {
+  table-layout: auto;
+  min-width: 100%;
+}
+
+th, td {
+  white-space: nowrap;
+  padding: 12px 16px;
+}
+/* Фикс для широких таблиц */
+.min-w-max {
+  min-width: max-content;
+}
+
+/* Красивые кнопки при переносе */
+.flex.flex-wrap > button {
+  flex-shrink: 0;
+}
+/* Фикс ширины и скролла таблицы */
+#current-window {
+  width: 100%;
+  overflow: hidden;
+}
+
+.overflow-x-auto {
+  max-width: 100%;
+  scrollbar-height: thin;
+}
+
+.overflow-x-auto::-webkit-scrollbar {
+  height: 10px;
+}
+
+.overflow-x-auto::-webkit-scrollbar-track {
+  background: #1e2937;
+}
+
+.overflow-x-auto::-webkit-scrollbar-thumb {
+  background: #22d3ee;
+  border-radius: 10px;
+}
+
+table.min-w-max {
+  min-width: max-content;
+  table-layout: auto;
+}
+
+th, td {
+  white-space: nowrap;
+  padding: 12px 20px;
+}
+/* Скролл таблицы */
+#table-scroll-container {
+  scrollbar-width: thin;
+  scrollbar-color: #22d3ee #334155;
+}
+
+#table-scroll-container::-webkit-scrollbar {
+  height: 10px;
+  width: 10px;
+}
+
+#table-scroll-container::-webkit-scrollbar-track {
+  background: #1e2937;
+}
+
+#table-scroll-container::-webkit-scrollbar-thumb {
+  background: #22d3ee;
+  border-radius: 10px;
+}
+
+#table-scroll-container::-webkit-scrollbar-thumb:hover {
+  background: #67e8f9;
+}
+
+.min-w-max {
+  min-width: max-content;
+}
