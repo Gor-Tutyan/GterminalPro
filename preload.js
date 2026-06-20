@@ -6,12 +6,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   executeQuery: (sql, params) => ipcRenderer.invoke('execute-query', sql, params),
   exportCsv: (data, filename) => ipcRenderer.invoke('export-csv', data, filename),
   exportXlsx: (data, filename) => ipcRenderer.invoke('export-xlsx', data, filename),
-  showDetails: (title, data) => ipcRenderer.invoke('show-details', title, data),
+  showDetails: (title, row, config) => ipcRenderer.invoke('show-details', title, row, config),
   login: (login, password) => ipcRenderer.invoke('login', login, password),
-  getLookupData: (sql) =>
+  getLookupData: (sql, params) =>
     ipcRenderer.invoke(
         'get-lookup-data',
-        sql
+        sql,
+        params || []
     ),
     loadConfig: () =>
     ipcRenderer.invoke(

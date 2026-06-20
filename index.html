@@ -36,12 +36,10 @@
         </div>
       </div>
 
-      <div class="p-4 flex-1 overflow-auto">
-        <div class="flex items-center justify-between px-4 mb-4">
+      <div class="p-4 flex-1 overflow-auto custom-scroll">
+        <div class="px-4 mb-4">
           <h3 class="text-xs uppercase tracking-widest text-slate-400 font-medium">Открытые окна</h3>
-          <button onclick="newWindow()" class="text-cyan-400 hover:text-cyan-300 transition-colors">
-            <i class="fas fa-plus"></i>
-          </button>
+          <div class="text-[10px] text-slate-500 mt-0.5">Добавляйте новые окна через «Администрирование → + Новое окно»</div>
         </div>
         <div class="window-list space-y-1" id="window-list"></div>
       </div>
@@ -82,7 +80,7 @@
       </div>
 
       <!-- Content Area - Главное исправление -->
-      <div class="flex-1 p-8 overflow-hidden bg-gradient-to-br from-slate-950 to-slate-900" id="current-window">
+      <div class="flex-1 p-5 overflow-hidden bg-slate-900" id="current-window">
         <!-- Динамическое содержимое -->
       </div>
     </div>
