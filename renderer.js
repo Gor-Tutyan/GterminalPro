@@ -1091,35 +1091,40 @@ async function validateField(field, value) {
             }
         }
 
-        if (v.type === 'language' && v.language) {
-            let regex = null;
-            const lang = v.language;
-            if (lang === 'armenian') {
-                regex = /^[\u0531-\u0556\u0561-\u0587\s]+$/; // Armenian letters + spaces
-            } else if (lang === 'latin') {
-                regex = /^[a-zA-Z\s]+$/;
-            } else if (lang === 'cyrillic') {
-                regex = /^[\u0400-\u04FF\s]+$/;
-            } else if (lang === 'digits') {
-                regex = /^\d+$/;
-            } else if (lang === 'alphanumeric') {
-                regex = /^[a-zA-Z0-9\s]+$/;
-            }
-            if (regex && !regex.test(strVal)) {
-                errors.push(v.error || 'Поле должно содержать только ' + lang + ' символы');
-            }
-        }
+        if (v.type === 'language' && v.language) if (v.type === 'language' && v.language) {
 
-        if (v.type === 'pattern' && v.pattern) {
-            try {
-                const regex = new RegExp(v.pattern);
-                if (!regex.test(strVal)) {
-                    errors.push(v.error || 'Значение не соответствует формату');
-                }
-            } catch (e) {
-                errors.push(v.error || 'Неверный формат регулярного выражения');
-            }
-        }
+    let regex = null;
+    const lang = v.language;
+
+    if (lang === 'armenian')
+        regex = /^[\u0531-\u0556\u0561-\u0587\s]+$/;
+
+    else if (lang === 'armenian_alphanumeric')
+        regex = /^[\u0531-\u0556\u0561-\u05870-9\s.,\-_/()@#$%&+:]+$/;
+
+    else if (lang === 'latin')
+        regex = /^[A-Za-z\s]+$/;
+
+    else if (lang === 'latin_alphanumeric')
+        regex = /^[A-Za-z0-9\s.,\-_/()@#$%&+:]+$/;
+
+    else if (lang === 'cyrillic')
+        regex = /^[\u0400-\u04FF\s]+$/;
+
+    else if (lang === 'cyrillic_alphanumeric')
+        regex = /^[\u0400-\u04FF0-9\s.,\-_/()@#$%&+:]+$/;
+
+    else if (lang === 'digits')
+        regex = /^\d+$/;
+
+    else if (lang === 'alphanumeric')
+        regex = /^[A-Za-z0-9\s]+$/;
+
+    // <<< ЭТО ОБЯЗАТЕЛЬНО !!!
+    if (regex && !regex.test(strVal)) {
+        errors.push(v.error || ('Поле должно содержать только ' + lang));
+    }
+}
 
         if (v.type === 'position' && v.value) {
             const start = (v.start || 1) - 1; // 1-based to 0-based
@@ -1193,28 +1198,39 @@ function syncValidateField(field, value) {
         }
 
         if (v.type === 'language' && v.language) {
-            let regex = null;
-            const lang = v.language;
-            if (lang === 'armenian') regex = /^[\u0531-\u0556\u0561-\u0587\s]+$/;
-            else if (lang === 'latin') regex = /^[a-zA-Z\s]+$/;
-            else if (lang === 'cyrillic') regex = /^[\u0400-\u04FF\s]+$/;
-            else if (lang === 'digits') regex = /^\d+$/;
-            else if (lang === 'alphanumeric') regex = /^[a-zA-Z0-9\s]+$/;
-            if (regex && !regex.test(strVal)) {
-                errors.push(v.error || 'Поле должно содержать только ' + lang + ' символы');
-            }
-        }
 
-        if (v.type === 'pattern' && v.pattern) {
-            try {
-                const regex = new RegExp(v.pattern);
-                if (!regex.test(strVal)) {
-                    errors.push(v.error || 'Значение не соответствует формату');
-                }
-            } catch (e) {
-                errors.push(v.error || 'Неверный формат регулярного выражения');
-            }
-        }
+    let regex = null;
+    const lang = v.language;
+
+    if (lang === 'armenian')
+        regex = /^[\u0531-\u0556\u0561-\u0587\s]+$/;
+
+    else if (lang === 'armenian_alphanumeric')
+        regex = /^[\u0531-\u0556\u0561-\u05870-9\s.,\-_/()@#$%&+:]+$/;
+
+    else if (lang === 'latin')
+        regex = /^[A-Za-z\s]+$/;
+
+    else if (lang === 'latin_alphanumeric')
+        regex = /^[A-Za-z0-9\s.,\-_/()@#$%&+:]+$/;
+
+    else if (lang === 'cyrillic')
+        regex = /^[\u0400-\u04FF\s]+$/;
+
+    else if (lang === 'cyrillic_alphanumeric')
+        regex = /^[\u0400-\u04FF0-9\s.,\-_/()@#$%&+:]+$/;
+
+    else if (lang === 'digits')
+        regex = /^\d+$/;
+
+    else if (lang === 'alphanumeric')
+        regex = /^[A-Za-z0-9\s]+$/;
+
+    // <<< ЭТО ОБЯЗАТЕЛЬНО !!!
+    if (regex && !regex.test(strVal)) {
+        errors.push(v.error || ('Поле должно содержать только ' + lang));
+    }
+}
 
         if (v.type === 'position' && v.value) {
             const start = (v.start || 1) - 1;
@@ -3827,8 +3843,21 @@ async function openFieldEditor(field, onSave, siblingFields = []) {
           } else if (t === 'position') {
             params.innerHTML = `<input placeholder="start (1-based)" id="p-start" value="1" class="bg-slate-800 px-1 rounded"> <input placeholder="длина" id="p-len" class="bg-slate-800 px-1 rounded"> <input placeholder="ожидаемое значение" id="p-val" class="bg-slate-800 px-1 rounded">`;
           } else if (t === 'language') {
-            params.innerHTML = `<select id="p-lang" class="bg-slate-800 px-1 rounded col-span-3"><option>armenian</option><option>latin</option><option>cyrillic</option><option>digits</option><option>alphanumeric</option></select>`;
-          } else if (t === 'pattern' || t === 'unique' || t === 'custom') {
+              params.innerHTML =
+              `<select id="p-lang" class="bg-slate-800 px-1 rounded col-span-3">
+                  <option value="armenian">armenian</option>
+                  <option value="armenian_alphanumeric">armenian + digits + symbols</option>
+
+                  <option value="latin">latin</option>
+                  <option value="latin_alphanumeric">latin + digits + symbols</option>
+
+                  <option value="cyrillic">cyrillic</option>
+                  <option value="cyrillic_alphanumeric">cyrillic + digits + symbols</option>
+
+                  <option value="digits">digits</option>
+                  <option value="alphanumeric">latin letters + digits</option>
+              </select>`;
+          }else if (t === 'pattern' || t === 'unique' || t === 'custom') {
             if (t === 'custom') {
               params.innerHTML = `
                 <input id="p-cond" placeholder="if условие напр. value > 1" class="bg-slate-800 px-1 rounded">
