@@ -88,27 +88,38 @@ ipcMain.handle('get-current-user', () => {
 
 // ==================== PATHS ====================
 
-const APP_DIR = 'C:/GTerminalPro';
-const isDev = !app.isPackaged;
+const isPackaged = app.isPackaged;
+const isDev = !isPackaged;
+
+// For portable exe: prefer directory next to the .exe
+// For dev: use __dirname
+const APP_DIR = isPackaged 
+  ? path.dirname(process.execPath)   // the folder containing the portable .exe
+  : 'C:/GTerminalPro';               // legacy installed path for config/db fallback
 
 function resolveConfigPath() {
-  // Primary: config from C:\GTerminalPro (as specified)
+  const candidates = [];
+
+  // 1. Next to the portable exe (best for portable version)
+  if (isPackaged) {
+    candidates.push(path.join(APP_DIR, 'config.json'));
+  }
+
+  // 2. Legacy installed path
   const installed = path.join(APP_DIR, 'config.json');
-  if (fs.existsSync(installed)) {
-    return installed;
+  candidates.push(installed);
+
+  // 3. Dev / packaged asar relative
+  candidates.push(path.join(__dirname, 'config', 'config.json'));
+  candidates.push(path.join(__dirname, 'config.json'));
+
+  for (const p of candidates) {
+    if (fs.existsSync(p)) {
+      return p;
+    }
   }
 
-  // Dev fallbacks
-  const subConfig = path.join(__dirname, 'config', 'config.json');
-  if (fs.existsSync(subConfig)) {
-    return subConfig;
-  }
-  const localConfig = path.join(__dirname, 'config.json');
-  if (fs.existsSync(localConfig)) {
-    return localConfig;
-  }
-
-  throw new Error(`Файл конфигурации не найден. Искомые пути:\n${installed}\n${subConfig}\n${localConfig}`);
+  throw new Error(`Файл конфигурации не найден. Проверены пути:\n` + candidates.join('\n'));
 }
 
 function getConfig() {
@@ -118,10 +129,11 @@ function getConfig() {
   // Resolve relative DB paths relative to project root (not the config file itself),
   // so both config/config.json and root config.json work.
   if (raw.database && !path.isAbsolute(raw.database)) {
-    // Project root = parent of __dirname or parent of "config/" if config lives inside it
-    let root = __dirname;
-    if (path.basename(path.dirname(configPath)) === 'config') {
-      root = path.dirname(path.dirname(configPath));  // go up from config/
+    // Resolve relative DB paths relative to the directory of the chosen config.json
+    // This works for portable (config next to exe), dev, and C:\ installs.
+    let root = path.dirname(configPath);
+    if (path.basename(root) === 'config') {
+      root = path.dirname(root);  // if config was in subfolder, go to its parent
     }
     raw.database = path.resolve(root, raw.database);
   }
@@ -224,7 +236,15 @@ ipcMain.handle('execute-query', (event, sql, params = []) => {
 
     const stmt = db.prepare(sql);
     const isSelect = sql.trim().toLowerCase().startsWith('select');
-    const bindParams = Array.isArray(params) ? params : [params];
+    const bindParams = Array.isArray(params) ? params : (params != null ? [params] : []);
+    const placeholderCount = (sql.match(/\?/g) || []).length;
+    if (placeholderCount > bindParams.length) {
+      console.warn('[execute-query] too few params for sql, returning empty/error. sql snippet:', sql.substring(0,100), 'provided:', bindParams.length);
+      if (isSelect) {
+        return { success: true, rows: [] };
+      }
+      return { success: false, error: 'Too few parameter values' };
+    }
 
     if (isSelect) {
       const rows = bindParams.length ? stmt.all(...bindParams) : stmt.all();
@@ -260,6 +280,12 @@ ipcMain.handle('get-lookup-data', (event, sql, params) => {
 
     const stmt = db.prepare(sql);
     const args = Array.isArray(params) ? params : (params != null ? [params] : []);
+    // Defensive against "Too few parameter values were provided"
+    const placeholderCount = (sql.match(/\?/g) || []).length;
+    if (placeholderCount > args.length) {
+      console.warn('[get-lookup] too few params provided for query, returning empty. sql:', sql, 'provided:', args.length, 'needed:', placeholderCount);
+      return [];
+    }
     return stmt.all(...args);
 
   } catch (err) {
@@ -308,6 +334,32 @@ ipcMain.handle('export-xlsx', (event, data, filename) => {
   return exportPath;
 });
 
+ipcMain.handle('select-file', async (event, options = {}) => {
+  const { dialog } = require('electron');
+  const result = await dialog.showOpenDialog({
+    properties: ['openFile'],
+    filters: options.filters || [{ name: 'All Files', extensions: ['*'] }]
+  });
+  if (result.canceled || !result.filePaths.length) return null;
+  return result.filePaths[0];
+});
+
+ipcMain.handle('read-excel', async (event, filePath) => {
+  const XLSX = require('xlsx');
+  const wb = XLSX.readFile(filePath);
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  return XLSX.utils.sheet_to_json(ws);
+});
+
+ipcMain.handle('read-excel-cell', async (event, filePath, cellRef) => {
+  const XLSX = require('xlsx');
+  const wb = XLSX.readFile(filePath);
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const cell = ws[cellRef];
+  if (!cell) return '';
+  return cell.v != null ? cell.v : (cell.w || '');
+});
+
 // ==================== DETAILS WINDOW ====================
 
 ipcMain.handle('show-details', (event, title, row, config) => {
@@ -331,32 +383,63 @@ ipcMain.handle('show-details', (event, title, row, config) => {
     <meta charset="UTF-8">
     <title>${title}</title>
     <style>
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400&amp;display=swap');
+
       body {
-        font-family: Segoe UI, sans-serif;
+        font-family: 'Inter', system-ui, sans-serif;
         background: #0f172a;
         color: #e2e8f0;
-        padding: 30px;
+        padding: 20px;
         margin: 0;
+        font-size: 14px;
+        line-height: 1.5;
       }
 
       h2 {
-        color: #67e8f9;
-        border-bottom: 2px solid #22d3ee;
+        color: #3b82f6;
+        font-size: 17px;
+        font-weight: 600;
+        margin: 0 0 14px 0;
         padding-bottom: 10px;
+        border-bottom: 1px solid #1e2937;
+        letter-spacing: -0.25px;
       }
 
       .detail {
         background: #1e2937;
-        margin: 10px 0;
-        padding: 12px 16px;
+        margin-bottom: 8px;
+        padding: 10px 14px;
         border-radius: 10px;
         border: 1px solid #334155;
+        display: flex;
+        gap: 14px;
+        align-items: flex-start;
       }
 
       .label {
-        display: inline-block;
-        width: 260px;
-        color: #94a3b8;
+        min-width: 170px;
+        color: #64748b;
+        font-size: 13px;
+        font-weight: 500;
+        flex-shrink: 0;
+        padding-top: 1px;
+      }
+
+      .value {
+        color: #f1f5f9;
+        word-break: break-word;
+        font-size: 14.5px;
+        line-height: 1.45;
+      }
+
+      .detail:hover {
+        border-color: #3b82f6;
+        background: #1e3a5f;
+      }
+
+      .mono {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 13px;
       }
     </style>
   </head>
@@ -381,10 +464,8 @@ ipcMain.handle('show-details', (event, title, row, config) => {
             '—';
 
           div.innerHTML =
-            '<span class="label">' +
-            item.title +
-            ':</span>' +
-            value;
+            '<span class="label">' + item.title + '</span>' +
+            '<span class="value mono">' + value + '</span>';
 
           container.appendChild(div);
         });
@@ -394,10 +475,8 @@ ipcMain.handle('show-details', (event, title, row, config) => {
           div.className = 'detail';
 
           div.innerHTML =
-            '<span class="label">' +
-            key +
-            ':</span>' +
-            (row[key] ?? '—');
+            '<span class="label">' + key + '</span>' +
+            '<span class="value mono">' + (row[key] ?? '—') + '</span>';
 
           container.appendChild(div);
         });
@@ -442,3 +521,79 @@ ipcMain.handle(
         return true;
     }
 );
+
+ipcMain.handle('get-users', () => {
+    if (!db) return [];
+    try {
+        return db.prepare(`
+            SELECT ID, LOGIN, ROLE, IS_ACTIVE, CREATED_AT, 
+                   WINDOWS_ACCESS, INSERT_ACCESS, UPDATE_ACCESS, DELETE_ACCESS 
+            FROM USERS
+            ORDER BY ID
+        `).all();
+    } catch (e) {
+        console.error(e);
+        return [];
+    }
+});
+
+ipcMain.handle('save-user', async (event, userData) => {
+    if (!db) return { success: false, error: 'DB not ready' };
+    try {
+        const now = new Date().toISOString();
+        if (userData.ID) {
+            // update
+            let sql = `UPDATE USERS SET LOGIN=?, ROLE=?, IS_ACTIVE=?,
+                       WINDOWS_ACCESS=?, INSERT_ACCESS=?, UPDATE_ACCESS=?, DELETE_ACCESS=?`;
+            const params = [
+                userData.LOGIN,
+                userData.ROLE || 'USER',
+                userData.IS_ACTIVE ? 1 : 0,
+                userData.WINDOWS_ACCESS || '',
+                userData.INSERT_ACCESS || '',
+                userData.UPDATE_ACCESS || '',
+                userData.DELETE_ACCESS || ''
+            ];
+            if (userData.PASSWORD && userData.PASSWORD.trim() !== '') {
+                const hash = await bcrypt.hash(userData.PASSWORD, 12);
+                sql += `, PASSWORD_HASH=?`;
+                params.push(hash);
+            }
+            sql += ` WHERE ID=?`;
+            params.push(userData.ID);
+            db.prepare(sql).run(...params);
+        } else {
+            // insert
+            const hash = await bcrypt.hash(userData.PASSWORD, 12);
+            db.prepare(`
+                INSERT INTO USERS (LOGIN, PASSWORD_HASH, ROLE, IS_ACTIVE, CREATED_AT,
+                                   WINDOWS_ACCESS, INSERT_ACCESS, UPDATE_ACCESS, DELETE_ACCESS)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `).run(
+                userData.LOGIN,
+                hash,
+                userData.ROLE || 'USER',
+                userData.IS_ACTIVE ? 1 : 0,
+                now,
+                userData.WINDOWS_ACCESS || '',
+                userData.INSERT_ACCESS || '',
+                userData.UPDATE_ACCESS || '',
+                userData.DELETE_ACCESS || ''
+            );
+        }
+        return { success: true };
+    } catch (e) {
+        console.error(e);
+        return { success: false, error: e.message };
+    }
+});
+
+ipcMain.handle('delete-user', (event, id) => {
+    if (!db) return { success: false };
+    try {
+        db.prepare('DELETE FROM USERS WHERE ID = ?').run(id);
+        return { success: true };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+});

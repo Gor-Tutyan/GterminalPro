@@ -21,30 +21,27 @@
 <body class="bg-gray-950 text-gray-100 overflow-hidden">
   <div class="flex h-screen">
     <!-- Sidebar -->
-    <div class="w-72 sidebar flex flex-col">
-      <div class="p-6 border-b border-cyan-500/20">
+    <div class="w-72 sidebar flex flex-col transition-all duration-300 overflow-hidden" id="sidebar">
+      <div class="p-6 border-b border-blue-500/20">
         <div class="flex items-center gap-3">
-          <div class="w-9 h-9 bg-gradient-to-br from-cyan-400 to-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-cyan-500/50">
-            <i class="fas fa-terminal text-white text-2xl"></i>
+          <div id="logo-container" class="w-9 h-9 bg-gradient-to-br from-blue-400 to-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/40 overflow-hidden">
+            <i id="app-icon" class="fas fa-terminal text-white text-2xl"></i>
+            <img id="app-logo" style="display:none; width:100%; height:100%; object-fit:contain;" />
           </div>
-          <div>
-            <h1 class="text-3xl font-bold tracking-tighter bg-gradient-to-r from-cyan-300 to-blue-400 bg-clip-text text-transparent">
+          <div class="sidebar-header-text">
+            <h1 class="text-3xl font-bold tracking-tighter bg-gradient-to-r from-blue-300 to-blue-400 bg-clip-text text-transparent">
               GTerminalPro
             </h1>
-            <p class="text-xs text-cyan-400/70 -mt-1">SQLite • Pro</p>
+            <p class="text-xs text-blue-400/70 -mt-1">SQLite • Pro</p>
           </div>
         </div>
       </div>
 
       <div class="p-4 flex-1 overflow-auto custom-scroll">
-        <div class="px-4 mb-4">
-          <h3 class="text-xs uppercase tracking-widest text-slate-400 font-medium">Открытые окна</h3>
-          <div class="text-[10px] text-slate-500 mt-0.5">Добавляйте новые окна через «Администрирование → + Новое окно»</div>
-        </div>
         <div class="window-list space-y-1" id="window-list"></div>
       </div>
 
-      <div class="p-4 border-t border-cyan-500/10 mt-auto">
+      <div class="p-4 border-t border-blue-500/10 mt-auto">
         <div class="flex items-center gap-3 px-4 py-3 bg-slate-900/50 rounded-2xl">
           <div class="w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></div>
           <span class="text-sm text-emerald-400">Подключено к базе</span>
@@ -56,25 +53,23 @@
     <div class="flex-1 flex flex-col overflow-hidden">
       <!-- Top Bar -->
       <div class="h-14 bg-slate-900 border-b border-slate-700 flex items-center px-6 justify-between flex-shrink-0">
-        <div class="flex items-center gap-4">
+        <div class="flex items-center gap-3">
+          <button onclick="toggleSidebar()" id="top-toggle-btn" class="text-slate-400 hover:text-white p-1.5 rounded hover:bg-slate-800 transition-colors" title="Свернуть/развернуть меню (сайдбар)">
+            <i class="fas fa-chevron-left text-sm chevron-top"></i>
+          </button>
           <h2 class="text-xl font-semibold text-white" id="window-title">GTerminalPro</h2>
-          <div class="px-3 py-1 text-xs bg-slate-800 text-cyan-400 rounded-full font-mono">main.db</div>
+          <div id="db-label" class="px-3 py-1 text-xs bg-slate-800 text-blue-400 rounded-full font-mono">main.db</div>
         </div>
 
-        <div class="flex items-center gap-6 text-slate-400">
-          <button class="hover:text-white transition-colors">
-            <i class="fas fa-search"></i>
-          </button>
-          <button class="hover:text-white transition-colors">
-            <i class="fas fa-history"></i>
-          </button>
-          <button onclick="toggleConsole()" class="hover:text-white transition-colors">
-            <i class="fas fa-terminal"></i>
+        <div class="flex items-center gap-4 text-slate-400">
+          <button onclick="reloadCurrentWindow()" class="hover:text-white transition-colors" title="Обновить данные / переподключить БД">
+            <i class="fas fa-sync-alt"></i>
           </button>
           <div class="w-px h-6 bg-slate-700"></div>
-          <div class="flex items-center gap-2 text-sm">
+          <div class="flex items-center gap-2 text-sm" id="user-display">
             <div class="w-7 h-7 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full"></div>
-            <span>admin</span>
+            <span id="current-user">admin</span>
+            <i id="logout-btn" class="fas fa-sign-out-alt ml-1 text-red-400 hover:text-red-500 cursor-pointer" style="font-size:11px" title="Выйти"></i>
           </div>
         </div>
       </div>

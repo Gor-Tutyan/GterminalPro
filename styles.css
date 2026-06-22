@@ -1,22 +1,25 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
 :root {
-  --accent: #22d3ee;
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --bg-main: #0a0f1c;
+  --bg-panel: #141c2e;
+  --border: #25324a;
+  --text: #f1f5f9;
+  --text-muted: #94a3b8;
+  --success: #059669;
+  --warning: #d97706;
+  --danger: #dc2626;
 }
 
 body {
   font-family: 'Inter', system-ui, sans-serif;
+  background: var(--bg-main);
+  color: var(--text);
 }
 
 /* ==================== GLOBAL COMPACT + BEAUTIFUL CLASSIC DESIGN ==================== */
-:root {
-  --accent: #0ea5e9;
-  --bg-main: #0f172a;
-  --bg-panel: #1e2937;
-  --border: #334155;
-  --text: #e2e8f0;
-  --text-muted: #94a3b8;
-}
 
 /* Global shrink + modern-classic beauty (best practices for DB admin tools) */
 body {
@@ -24,9 +27,10 @@ body {
   line-height: 1.3;
 }
 
-/* Subtle beauty touches */
+/* Subtle beauty touches - classic focus */
 input:focus, select:focus, textarea:focus {
-  box-shadow: 0 0 0 2px rgba(14, 165, 233, 0.25) !important;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.25) !important;
+  border-color: var(--accent) !important;
 }
 
 .guide-item {
@@ -50,7 +54,7 @@ h3, .text-xl { font-size: 15px !important; }
 .admin-panel,
 #insert-fields-list,
 #update-fields-list {
-  gap: 8px !important;
+  gap: 6px !important;
 }
 
 .bg-slate-800,
@@ -60,21 +64,39 @@ h3, .text-xl { font-size: 15px !important; }
   border-radius: 8px !important; /* less "web", more classic desktop */
 }
 
-/* Tighter form controls */
+/* Beautiful, readable form controls (admin-like) */
 #form-fields input,
 #form-fields select,
 #form-fields textarea,
 input, select, textarea {
-  padding: 6px 10px !important;
-  font-size: 13px !important;
-  border-radius: 6px !important;
-  line-height: 1.3 !important;
+  padding: 8px 12px !important;
+  font-size: 13.5px !important;
+  border-radius: 8px !important;
+  line-height: 1.4 !important;
+  transition: border-color 0.1s, box-shadow 0.1s;
+  background: #1e2937 !important;
+  color: #e2e8f0 !important;
+  font-family: 'Inter', system-ui, sans-serif !important;
+  font-feature-settings: "tnum" !important;
 }
 
 #form-fields label {
-  font-size: 11px !important;
-  margin-bottom: 3px !important;
-  color: var(--text-muted);
+  font-size: 13px !important;
+  margin-bottom: 8px !important;
+  color: #cbd5e1;
+  font-weight: 500;
+  font-family: 'Inter', system-ui, sans-serif !important;
+}
+
+/* Make form inputs match admin text crispness */
+#form-fields input,
+#form-fields select,
+#form-fields textarea {
+  font-feature-settings: "tnum" !important;
+}
+
+#form-fields .text-red-400 {
+  color: #f87171 !important;
 }
 
 .font-mono {
@@ -83,8 +105,83 @@ input, select, textarea {
 
 /* Sidebar - компактный классический вид */
 .sidebar {
-  background: #0f172a;
+  background: var(--bg-main);
   border-right: 1px solid var(--border);
+  transition: width 0.3s ease;
+}
+
+.sidebar.collapsed {
+  width: 4.5rem !important;
+  overflow: hidden !important;
+}
+
+/* Hide header title/texts and prevent logo/title bleed on collapse */
+.sidebar.collapsed .sidebar-header-text,
+.sidebar.collapsed .p-6 h1,
+.sidebar.collapsed .p-6 .bg-gradient-to-r,
+.sidebar.collapsed .p-6 p,
+.sidebar.collapsed h3,
+.sidebar.collapsed p,
+.sidebar.collapsed .text-xs {
+  display: none !important;
+}
+
+.sidebar.collapsed .p-6 {
+  padding: 6px 4px !important;
+}
+
+.sidebar.collapsed #logo-container {
+  width: 1.875rem !important;
+  height: 1.875rem !important;
+  margin: 5px auto 1px;
+}
+
+/* No internal toggle anymore — only topbar toggle exists */
+
+/* Hide bottom status text block when collapsed too */
+.sidebar.collapsed .p-4.border-t,
+.sidebar.collapsed .p-4.border-t.mt-auto {
+  padding: 2px !important;
+}
+.sidebar.collapsed .p-4.border-t > div,
+.sidebar.collapsed .p-4.border-t .flex {
+  display: none !important;
+}
+
+.sidebar.collapsed .window-list button span,
+.sidebar.collapsed h3,
+.sidebar.collapsed p,
+.sidebar.collapsed .text-xs {
+  display: none !important;
+}
+
+.sidebar.collapsed .window-list button {
+  width: 2.25rem !important;
+  height: 2.25rem !important;
+  padding: 0;
+  margin: 0 auto 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.5rem;
+}
+
+.sidebar.collapsed .window-list {
+  padding-top: 4px;
+  padding-bottom: 2px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.sidebar.collapsed .window-list button i {
+  font-size: 1rem;
+}
+
+.sidebar.collapsed .window-list button.bg-slate-700,
+.sidebar.collapsed .window-list button.bg-blue-600 {
+  background-color: #2563eb !important;
+  color: white !important;
 }
 
 .window-list button {
@@ -94,12 +191,12 @@ input, select, textarea {
 }
 
 .window-list button:hover {
-  background: #1e2937;
+  background: var(--bg-panel);
 }
 
 .window-list button.active {
-  background: #1e2937;
-  border-left: 3px solid #0ea5e9;
+  background: var(--bg-panel);
+  border-left: 3px solid var(--accent);
   padding-left: 13px;
 }
 
@@ -110,11 +207,11 @@ input, select, textarea {
 
 .window-list .window-item:hover {
   transform: translateX(6px);
-  background-color: rgba(34, 211, 238, 0.1);
+  background-color: rgba(59, 130, 246, 0.1);
 }
 
 .window-list .window-item.active {
-  background: linear-gradient(90deg, rgba(34, 211, 238, 0.2), transparent);
+  background: linear-gradient(90deg, rgba(59, 130, 246, 0.2), transparent);
   border-left: 3px solid var(--accent);
   color: white;
 }
@@ -128,7 +225,7 @@ table {
 
 #table-scroll-container th,
 #current-window th {
-  background: #1e2937 !important;
+  background: var(--bg-panel) !important;
   color: #cbd5e1;
   position: sticky !important;
   top: 0 !important;
@@ -151,13 +248,13 @@ table {
 
 td {
   padding: 5px 10px;
-  border-bottom: 1px solid #334155;
+  border-bottom: 1px solid var(--border);
   vertical-align: top;
   font-size: 12.5px;
 }
 
 tr:hover {
-  background: #1e2937;
+  background: var(--bg-panel);
 }
 
 tr:last-child td {
@@ -167,9 +264,10 @@ tr:last-child td {
 /* Better visual cards and panels */
 .bg-slate-800,
 .bg-slate-900 {
-  box-shadow: 0 1px 3px rgba(0,0,0,0.15);
-  border: 1px solid #334155;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  border: 1px solid var(--border);
   transition: border-color .1s, box-shadow .1s;
+  background: var(--bg-panel) !important;
 }
 
 .bg-slate-800:hover,
@@ -177,15 +275,110 @@ tr:last-child td {
   border-color: #475569;
 }
 
-.rounded-xl, .rounded-2xl, .rounded-3xl {
+/* Premium beautiful form modal (create/edit records) */
+#form-modal {
+  font-family: 'Inter', system-ui, sans-serif;
+}
+#form-modal > div {
+  box-shadow: 0 20px 50px -12px rgb(0 0 0 / 0.5);
   border: 1px solid #334155;
 }
+#form-modal .bg-slate-900 {
+  background: #0f172a !important;
+}
+#form-modal .border-b {
+  border-color: #334155;
+}
+#form-modal input,
+#form-modal select,
+#form-modal textarea {
+  background: #1e2937 !important;
+  border: 1px solid #334155 !important;
+  font-size: 13.5px !important;
+  padding: 7px 11px !important;
+  border-radius: 10px !important;
+  line-height: 1.3 !important;
+}
+#form-modal input:focus,
+#form-modal select:focus,
+#form-modal textarea:focus {
+  border-color: #3b82f6 !important;
+  box-shadow: 0 0 0 2.5px rgba(59, 130, 246, 0.15) !important;
+  outline: none;
+}
+#form-modal label {
+  font-size: 13px !important;
+  color: #cbd5e1 !important;
+  font-weight: 500;
+}
+#form-modal .form-field {
+  min-height: 0;
+}
+#form-modal .form-field > label {
+  margin-bottom: 4px !important;
+}
+#form-modal > div {
+  background: #0f172a !important;
+}
+#form-modal button {
+  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+#form-modal button:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.08);
+}
+#form-modal button {
+  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+#form-modal button:hover {
+  transform: translateY(-1px);
+}
+#form-modal label {
+  font-feature-settings: "tnum";
+}
 
-/* Окно с деталями */
+/* Clean compact beautiful single-column form */
+#form-modal #form-fields {
+  font-size: 13.5px;
+  padding: 4px 2px 2px;
+}
+#form-modal #form-fields .form-field,
+#form-modal #form-fields > div {
+  background: transparent;
+  margin-bottom: 0 !important;
+  padding-bottom: 2px;
+}
+
+#form-modal #form-fields .form-field > div[id^="err-"] {
+  color: #f87171 !important;
+  font-size: 10px !important;
+  line-height: 1.1 !important;
+  padding-top: 2px !important;
+  margin-top: 1px !important;
+  display: block !important;
+  min-height: 14px !important;
+}
+
+/* Custom buttons in form modals — clean and subtle */
+#form-modal #form-scroll-area > div[class*="flex gap-2"] {
+  padding-bottom: 4px;
+  margin-bottom: 6px;
+}
+#form-modal #form-scroll-area > div[class*="flex gap-2"]:last-child {
+  padding-top: 6px;
+  margin-top: 2px;
+  margin-bottom: 0;
+}
+
+.rounded-xl, .rounded-2xl, .rounded-3xl {
+  border: 1px solid var(--border);
+}
+
+/* Окно с деталями - классический */
 .detail-window {
-  background: linear-gradient(145deg, #1e2937, #0f172a);
-  border: 1px solid rgba(103, 232, 249, 0.2);
-  box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.4);
+  background: linear-gradient(145deg, var(--bg-panel), var(--bg-main));
+  border: 1px solid rgba(59, 130, 246, 0.15);
+  box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.45);
 }
 
 /* Анимации */
@@ -204,14 +397,14 @@ tr:last-child td {
 }
 
 ::-webkit-scrollbar-track {
-  background: #1e2937;
+  background: var(--bg-panel);
   border-radius: 0;
 }
 
 ::-webkit-scrollbar-thumb {
   background: #475569;
   border-radius: 0;
-  border: 1px solid #0f172a;
+  border: 1px solid var(--bg-main);
 }
 
 ::-webkit-scrollbar-thumb:hover {
@@ -219,26 +412,26 @@ tr:last-child td {
 }
 
 ::-webkit-scrollbar-corner {
-  background: #1e2937;
+  background: var(--bg-panel);
 }
 
 /* Firefox */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #475569 #1e2937;
+  scrollbar-color: #475569 var(--bg-panel);
 }
 
 /* === ОСНОВНЫЕ ОБЛАСТИ СКРОЛЛА ДЛЯ КАЖДОГО "ОКНА" === */
 /* Extra visual polish for content */
 #current-window {
-  background: #0f172a;
+  background: var(--bg-main);
 }
 
 /* Главная таблица результатов (каждое окно имеет свою таблицу) */
 #table-scroll-container {
   overflow: auto;
   scrollbar-width: thin;
-  scrollbar-color: #475569 #1e2937;
+  scrollbar-color: #475569 var(--bg-panel);
 }
 
 #table-scroll-container::-webkit-scrollbar {
@@ -247,12 +440,12 @@ tr:last-child td {
 }
 
 #table-scroll-container::-webkit-scrollbar-track {
-  background: #1e2937;
+  background: var(--bg-panel);
 }
 
 #table-scroll-container::-webkit-scrollbar-thumb {
   background: #475569;
-  border: 1px solid #0f172a;
+  border: 1px solid var(--bg-main);
 }
 
 #table-scroll-container::-webkit-scrollbar-thumb:hover {
@@ -265,7 +458,7 @@ tr:last-child td {
   overflow: auto;
   max-height: 340px;
   scrollbar-width: thin;
-  scrollbar-color: #475569 #1e2937;
+  scrollbar-color: #475569 var(--bg-panel);
 }
 
 #insert-fields-list::-webkit-scrollbar,
@@ -275,7 +468,7 @@ tr:last-child td {
 
 #insert-fields-list::-webkit-scrollbar-track,
 #update-fields-list::-webkit-scrollbar-track {
-  background: #1e2937;
+  background: var(--bg-panel);
 }
 
 #insert-fields-list::-webkit-scrollbar-thumb,
@@ -288,7 +481,7 @@ tr:last-child td {
   overflow: auto;
   max-height: 180px;
   scrollbar-width: thin;
-  scrollbar-color: #475569 #1e2937;
+  scrollbar-color: #475569 var(--bg-panel);
 }
 
 #admin-relations-list::-webkit-scrollbar {
@@ -296,7 +489,7 @@ tr:last-child td {
 }
 
 #admin-relations-list::-webkit-scrollbar-track {
-  background: #1e2937;
+  background: var(--bg-panel);
 }
 
 #admin-relations-list::-webkit-scrollbar-thumb {
@@ -319,10 +512,11 @@ tr:last-child td {
 
 /* Сайдбар со списком окон */
 .sidebar .overflow-auto,
-.p-4.flex-1.overflow-auto {
+.p-4.flex-1.overflow-auto,
+#window-list {
   overflow: auto;
   scrollbar-width: thin;
-  scrollbar-color: #475569 #1e2937;
+  scrollbar-color: #475569 var(--bg-panel);
 }
 
 .sidebar .overflow-auto::-webkit-scrollbar {
@@ -342,7 +536,7 @@ tr:last-child td {
 #fe-validations {
   overflow: auto;
   scrollbar-width: thin;
-  scrollbar-color: #475569 #1e2937;
+  scrollbar-color: #475569 var(--bg-panel);
   padding: 8px !important;
 }
 
@@ -354,7 +548,7 @@ tr:last-child td {
 .custom-scroll {
   overflow: auto;
   scrollbar-width: thin;
-  scrollbar-color: #475569 #1e2937;
+  scrollbar-color: #475569 var(--bg-panel);
 }
 
 .custom-scroll::-webkit-scrollbar {
@@ -363,12 +557,12 @@ tr:last-child td {
 }
 
 .custom-scroll::-webkit-scrollbar-track {
-  background: #1e2937;
+  background: var(--bg-panel);
 }
 
 .custom-scroll::-webkit-scrollbar-thumb {
   background: #475569;
-  border: 1px solid #0f172a;
+  border: 1px solid var(--bg-main);
 }
 
 .custom-scroll::-webkit-scrollbar-thumb:hover {
@@ -379,7 +573,7 @@ tr:last-child td {
 #current-window .overflow-auto,
 #current-window .custom-scroll {
   scrollbar-width: thin;
-  scrollbar-color: #475569 #1e2937;
+  scrollbar-color: #475569 var(--bg-panel);
 }
 
 /* Убедимся что скролл всегда виден и работает в контенте окна */
@@ -431,7 +625,7 @@ th, td {
 #table-scroll-container,
 #table-scroll-container.custom-scroll {
   scrollbar-width: thin;
-  scrollbar-color: #64748b #1e2937;
+  scrollbar-color: #64748b var(--bg-panel);
 }
 
 #table-scroll-container::-webkit-scrollbar,
@@ -442,7 +636,7 @@ th, td {
 
 #table-scroll-container::-webkit-scrollbar-track,
 #table-scroll-container.custom-scroll::-webkit-scrollbar-track {
-  background: #1e2937;
+  background: var(--bg-panel);
   border-radius: 6px;
 }
 
@@ -465,7 +659,7 @@ th, td {
 #fields-list,
 #admin-relations-list {
     scrollbar-width: thin;
-    scrollbar-color: #64748b #1e2937;
+    scrollbar-color: #64748b var(--bg-panel);
 }
 
 #admin-editor::-webkit-scrollbar,
@@ -477,7 +671,7 @@ th, td {
 #admin-editor::-webkit-scrollbar-track,
 #fields-list::-webkit-scrollbar-track,
 #admin-relations-list::-webkit-scrollbar-track {
-  background: #1e2937;
+  background: var(--bg-panel);
   border-radius: 8px;
 }
 
@@ -498,7 +692,7 @@ th, td {
 #form-modal .p-8.overflow-auto,
 #field-editor-modal .p-8.overflow-auto {
   scrollbar-width: thin;
-  scrollbar-color: #64748b #1e2937;
+  scrollbar-color: #64748b var(--bg-panel);
 }
 
 #form-modal .p-8.overflow-auto::-webkit-scrollbar,
@@ -508,7 +702,7 @@ th, td {
 
 #form-modal .p-8.overflow-auto::-webkit-scrollbar-track,
 #field-editor-modal .p-8.overflow-auto::-webkit-scrollbar-track {
-  background: #1e2937;
+  background: var(--bg-panel);
   border-radius: 8px;
 }
 
@@ -523,7 +717,7 @@ th, td {
 .p-4.flex-1.overflow-auto,
 #window-list {
   scrollbar-width: thin;
-  scrollbar-color: #64748b #1e2937;
+  scrollbar-color: #64748b var(--bg-panel);
 }
 
 #window-list::-webkit-scrollbar {
@@ -545,7 +739,7 @@ th, td {
 #form-scroll-area {
   overflow: auto !important;
   scrollbar-width: thin;
-  scrollbar-color: #64748b #1e2937;
+  scrollbar-color: #64748b var(--bg-panel);
 }
 
 #form-modal .custom-scroll::-webkit-scrollbar,
@@ -558,15 +752,15 @@ th, td {
 #form-modal .custom-scroll::-webkit-scrollbar-track,
 #form-modal #form-scroll-area::-webkit-scrollbar-track,
 #form-scroll-area::-webkit-scrollbar-track {
-  background: #1e2937;
-  border: 1px solid #0f172a;
+  background: var(--bg-panel);
+  border: 1px solid var(--bg-main);
 }
 
 #form-modal .custom-scroll::-webkit-scrollbar-thumb,
 #form-modal #form-scroll-area::-webkit-scrollbar-thumb,
 #form-scroll-area::-webkit-scrollbar-thumb {
   background: #475569;
-  border: 1px solid #0f172a;
+  border: 1px solid var(--bg-main);
 }
 
 #form-modal .custom-scroll::-webkit-scrollbar-thumb:hover,
@@ -580,7 +774,7 @@ th, td {
 #update-fields-list {
   overflow: auto !important;
   scrollbar-width: thin;
-  scrollbar-color: #64748b #1e2937;
+  scrollbar-color: #64748b var(--bg-panel);
 }
 
 #insert-fields-list::-webkit-scrollbar,
@@ -590,13 +784,13 @@ th, td {
 
 #insert-fields-list::-webkit-scrollbar-track,
 #update-fields-list::-webkit-scrollbar-track {
-  background: #1e2937;
+  background: var(--bg-panel);
 }
 
 #insert-fields-list::-webkit-scrollbar-thumb,
 #update-fields-list::-webkit-scrollbar-thumb {
   background: #475569;
-  border: 1px solid #0f172a;
+  border: 1px solid var(--bg-main);
 }
 
 #insert-fields-list::-webkit-scrollbar-thumb:hover,
@@ -607,7 +801,7 @@ th, td {
 /* General custom-scroll boost for admin and forms */
 .custom-scroll {
   scrollbar-width: thin;
-  scrollbar-color: #64748b #1e2937;
+  scrollbar-color: #64748b var(--bg-panel);
 }
 .custom-scroll::-webkit-scrollbar {
   width: 13px;
@@ -615,7 +809,7 @@ th, td {
 }
 .custom-scroll::-webkit-scrollbar-thumb {
   background: #475569;
-  border: 1px solid #0f172a;
+  border: 1px solid var(--bg-main);
 }
 
 /* Pager in main results windows */
@@ -638,7 +832,7 @@ th, td {
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  background: #0f172a;
+  background: var(--bg-main);
   color: #e2e8f0;
   font-size: 14px;
 }
@@ -653,7 +847,7 @@ th, td {
 /* Solid classic panels */
 #current-window .bg-slate-800,
 #current-window div[class*="bg-slate-8"] {
-  background-color: #1e2937 !important;
+  background-color: var(--bg-panel) !important;
   border-color: #334155 !important;
 }
 
@@ -683,17 +877,17 @@ button:hover {
   background: #334155;
 }
 
-button.bg-emerald-600, button.bg-sky-600, button.bg-amber-600 {
+button.bg-emerald-600, button.bg-blue-600, button.bg-amber-600 {
   border-color: transparent;
 }
 
-button.bg-emerald-600:hover { background: #10b981; }
-button.bg-sky-600:hover { background: #0284c8; }
+button.bg-emerald-600:hover { background: #047857; }
+button.bg-blue-600:hover { background: #1d4ed8; }
 
 /* Make sure table container and results always visible and scroll */
 #table-scroll-container,
 #current-window #table-scroll-container {
-  background: #1e2937;
+  background: var(--bg-panel);
   min-height: 120px;
 }
 
@@ -703,7 +897,7 @@ button.bg-sky-600:hover { background: #0284c8; }
 }
 
 #pager-container {
-  background: #0f172a;
+  background: var(--bg-main);
   border-top: 1px solid #334155;
 }
 
@@ -711,7 +905,7 @@ button.bg-sky-600:hover { background: #0284c8; }
 #current-window .rounded-2xl,
 #current-window .rounded-xl {
   border: 1px solid #334155;
-  background: #1e2937;
+  background: var(--bg-panel);
 }
 
 .section-title {
@@ -761,7 +955,7 @@ select {
   -webkit-appearance: none;
   -moz-appearance: none;
   appearance: none;
-  background-color: #1e2937;
+  background-color: var(--bg-panel);
   color: #e2e8f0;
   border: 1px solid #475569;
   border-radius: 12px;
@@ -777,7 +971,7 @@ select {
 }
 
 select:focus {
-  border-color: #22d3ee;
+  border-color: #2563eb;
   box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.15);
   outline: none;
 }
@@ -797,8 +991,8 @@ input[list] {
 }
 
 input[list]:focus {
-  border-color: #22d3ee;
-  box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.2);
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
   outline: none;
 }
 
@@ -815,23 +1009,25 @@ input.searchable-select {
 }
 
 input.searchable-select:focus {
-  border-color: #0ea5e9;
-  box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.15);
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
 }
 
-/* Form fields — компактные и красивые */
+/* Form fields — компактные и красивые (точно как в админке) */
 #form-fields select,
 #form-fields input[list],
 #form-fields input.searchable-select,
 #form-fields input,
 #form-fields textarea {
-  border-radius: 6px !important;
-  padding: 5px 9px !important;
-  font-size: 12.5px !important;
+  border-radius: 8px !important;
+  padding: 8px 12px !important;
+  font-size: 13.5px !important;
+  background: #1e2937 !important;
+  color: #e2e8f0 !important;
 }
 
 #form-fields > div {
-  margin-bottom: 4px;
+  margin-bottom: 10px;
 }
 
 /* Make sure cursor always visible in all "windows" / content areas */

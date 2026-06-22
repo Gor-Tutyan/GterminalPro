@@ -3,13 +3,76 @@ let currentResults = [];
 let dbReady = false;
 let currentPage = 1;
 let currentUser = null;
+let inactivityTimeout = null;
 const ROWS_PER_PAGE = 21;
 let selectedRow = null;
 let fullConfig = null;
 
 let masterContext = null;        // { windowId, keyField, value }
+
+let sidebarCollapsed = localStorage.getItem('sidebarCollapsed') === 'true';
+
+function toggleSidebar() {
+  sidebarCollapsed = !sidebarCollapsed;
+  localStorage.setItem('sidebarCollapsed', sidebarCollapsed);
+  updateSidebarState();
+}
+
+function updateSidebarState() {
+  const sidebar = document.querySelector('.sidebar');
+  if (!sidebar) return;
+
+  // Only one toggle button now (in top bar) — keep its chevron in sync
+  const topChevron = document.querySelector('.chevron-top');
+  if (topChevron) {
+    topChevron.classList.toggle('fa-chevron-left', !sidebarCollapsed);
+    topChevron.classList.toggle('fa-chevron-right', sidebarCollapsed);
+  }
+
+  if (sidebarCollapsed) {
+    sidebar.classList.add('collapsed');
+  } else {
+    sidebar.classList.remove('collapsed');
+  }
+
+  // Rebuild lists to adjust for collapsed state (icons only etc)
+  if (typeof refreshWindowList === 'function') {
+    refreshWindowList();
+  }
+}
 let pendingFormPrefill = null;   // { fieldName: value, ... } for pre-filling inserts from master selection
 let filtersVisible = false;
+let currentDrop = null;
+let currentInputEl = null;
+
+// Permanent single listener for closing dropdowns (more reliable across form switches and modals)
+let globalDropdownCloserInstalled = false;
+
+function installGlobalDropdownCloser() {
+  if (globalDropdownCloserInstalled) return;
+  globalDropdownCloserInstalled = true;
+
+  document.addEventListener('mousedown', (e) => {
+    if (currentDrop && !currentDrop.contains(e.target) && e.target !== currentInputEl) {
+      if (currentDrop) currentDrop.remove();
+      currentDrop = null;
+      currentInputEl = null;
+    }
+  }, true);
+}
+
+function closeCurrentDropdown() {
+  if (currentDrop) {
+    currentDrop.remove();
+    currentDrop = null;
+  }
+  currentInputEl = null;
+}
+
+function cleanupAllDropdowns() {
+  closeCurrentDropdown();
+  document.querySelectorAll('div.fixed.z-\\[99999\\]').forEach(d => d.remove());
+}
 
 function normalizeWindowConfig(win) {
     const normalized = { ...win };
@@ -53,7 +116,9 @@ function normalizeWindowConfig(win) {
                 type: f.type || 'text',
                 lookupQuery: f.lookupQuery || (f.lookup && f.lookup.sql),
 
-                required: !!f.required
+                required: !!f.required,
+                disabled: !!f.disabled,
+                readonly: !!f.readonly
             }))
         };
     }
@@ -90,10 +155,14 @@ function normalizeWindowConfig(win) {
         normalized.details = Array.isArray(win.details) ? win.details : [];
     }
 
+    if (!Array.isArray(normalized.rowFormatting)) {
+        normalized.rowFormatting = Array.isArray(win.rowFormatting) ? win.rowFormatting : [];
+    }
+
     return normalized;
 }
 
-// ==================== CUSTOM PROMPT / CONFIRM (prompt()/confirm() disabled in this env) ====================
+// ==================== CUSTOM PROMPT / CONFIRM (все нативные alert/confirm заменены на showToast / customConfirm чтобы не ломать фокус селекторов) ====================
 function _createInputModal(title, message, defaultValue = '', isConfirm = false) {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
@@ -106,12 +175,12 @@ function _createInputModal(title, message, defaultValue = '', isConfirm = false)
           <div class="text-sm text-slate-300 mb-4">${message}</div>
           ${isPrompt ? `
           <input id="custom-prompt-input" type="text" value="${(defaultValue || '').replace(/"/g, '&quot;')}" 
-                 class="w-full bg-slate-900 border border-slate-600 focus:border-sky-500 rounded-xl px-4 py-2.5 text-sm outline-none">
+                 class="w-full bg-slate-900 border border-slate-600 focus:border-blue-500 rounded-xl px-4 py-2.5 text-sm outline-none">
           ` : ''}
         </div>
         <div class="px-5 py-4 bg-slate-900/60 rounded-b-2xl flex justify-end gap-2">
           <button id="custom-modal-cancel" class="px-5 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-sm">${isConfirm ? 'Нет' : 'Отмена'}</button>
-          <button id="custom-modal-ok" class="px-5 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-sm font-medium">${isConfirm ? 'Да' : 'OK'}</button>
+          <button id="custom-modal-ok" class="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-sm font-medium">${isConfirm ? 'Да' : 'OK'}</button>
         </div>
       </div>
     `;
@@ -157,6 +226,20 @@ async function customConfirm(message) {
   return _createInputModal('Подтверждение', message, '', true);
 }
 
+function updateLogo() {
+    if (!fullConfig || !fullConfig.logo) return;
+    const icon = document.getElementById('app-icon');
+    const logo = document.getElementById('app-logo');
+    const container = document.getElementById('logo-container');
+    if (logo && icon && container) {
+        logo.src = fullConfig.logo;
+        logo.style.display = 'block';
+        icon.style.display = 'none';
+        container.style.background = 'transparent';
+        container.style.boxShadow = 'none';
+    }
+}
+
 async function init() {
     const user = JSON.parse(localStorage.getItem('currentUser'));
     if (!user) {
@@ -165,51 +248,65 @@ async function init() {
     }
     currentUser = user;
 
+    // Set dynamic login display early
+    const userSpan = document.getElementById('current-user');
+    if (userSpan) {
+        userSpan.textContent = user.login || user.LOGIN || 'user';
+    }
+
+    // Logout functionality
+    window.logout = function() {
+      if (inactivityTimeout) clearTimeout(inactivityTimeout);
+      localStorage.removeItem('currentUser');
+      currentUser = null;
+      window.location.href = 'login.html';
+    };
+
+    const logoutBtn = document.getElementById('logout-btn');
+    if (logoutBtn) {
+      logoutBtn.onclick = window.logout;
+    };
+
+    // Inactivity auto-logout after ~1 hour of no clicks/mouse/key
+    function resetInactivity() {
+      if (inactivityTimeout) clearTimeout(inactivityTimeout);
+      inactivityTimeout = setTimeout(async () => {
+        const ok = await customConfirm('Вы были неактивны более 1 часа. Автоматический выход из системы?');
+        if (ok) {
+          window.logout();
+        } else {
+          // reset again
+          resetInactivity();
+        }
+      }, 60 * 60 * 1000); // 1 hour
+    }
+
+    document.addEventListener('click', resetInactivity);
+    document.addEventListener('mousemove', resetInactivity, { passive: true });
+    document.addEventListener('keypress', resetInactivity);
+    // initial
+    resetInactivity();
+
     try {
         fullConfig = await window.electronAPI.getConfig();
         if (!fullConfig) fullConfig = {};
         if (!Array.isArray(fullConfig.windows)) fullConfig.windows = [];
         document.getElementById('window-title').textContent = fullConfig.title || "GTerminalPro";
 
-        const list = document.getElementById('window-list');
-        list.innerHTML = '';
+        const dbLabel = document.getElementById('db-label');
+        if (dbLabel && fullConfig.database) {
+            dbLabel.textContent = fullConfig.database.split(/[/\\]/).pop() || 'database.db';
+        }
+
+        // Support custom logo from config (e.g. "logo.png" or data URL)
+        updateLogo();
 
         if (!fullConfig.windows) fullConfig.windows = [];
 
-        fullConfig.windows.forEach((win, index) => {
-            const btn = document.createElement('button');
-            btn.className = 'w-full text-left px-4 py-2.5 flex items-center gap-3 text-sm transition-colors hover:bg-slate-700 ' + (index === 0 ? 'bg-slate-700' : '');
-            const icon = win.icon || 'fa-table';
-            const hasRels = (win.relations && win.relations.length > 0) ? '<i class="fas fa-link text-[10px] text-violet-400 ml-1"></i>' : '';
-            btn.innerHTML = '<i class="fas ' + icon + ' text-cyan-400"></i><span class="font-medium">' + win.title + '</span>' + hasRels;
-            btn.onclick = () => {
-                document.querySelectorAll('#window-list button').forEach(b => b.classList.remove('bg-slate-800'));
-                btn.classList.add('bg-slate-800');
-                const lw = window.loadWindow || (typeof loadWindow !== 'undefined' ? loadWindow : null);
-                if (lw) lw(win); else console.error('loadWindow not available');
-            };
-            list.appendChild(btn);
-        });
+        // Use the proper refresh that respects collapsed state + datasets + active highlight
+        refreshWindowList();
 
-        if (user.role === 'ADMIN') {
-            const adminBtn = document.createElement('button');
-            adminBtn.className = 'w-full text-left px-4 py-2.5 flex items-center gap-3 text-sm mt-3 border-t border-slate-700 pt-3 text-amber-400 hover:text-amber-300';
-            adminBtn.innerHTML = '<i class="fas fa-cog text-yellow-400"></i><span class="font-medium text-yellow-400">Администрирование</span>';
-            adminBtn.onclick = () => {
-                document.querySelectorAll('#window-list button').forEach(b => b.classList.remove('bg-slate-800'));
-                adminBtn.classList.add('bg-slate-800');
-                let fn = null;
-                if (typeof window !== 'undefined' && typeof window.openAdminWindow === 'function') {
-                    fn = window.openAdminWindow;
-                }
-                if (fn) {
-                    fn();
-                } else {
-                    console.error('openAdminWindow not available');
-                }
-            };
-            list.appendChild(adminBtn);
-        }
+        updateSidebarState();
 
         // Main sidebar + button for new windows removed.
         // Proper window creation (with ID + per-window INSERT/UPDATE/DELETE) is done only from Admin.
@@ -224,13 +321,19 @@ async function init() {
         });
 
         if (fullConfig.windows && fullConfig.windows.length > 0) {
+            const allowed = (currentUser && currentUser.windowsAccess) ? String(currentUser.windowsAccess).split(',').map(s=>s.trim()).filter(Boolean) : null;
+            let candidates = fullConfig.windows;
+            if (allowed && allowed.length > 0 && currentUser.role !== 'ADMIN') {
+                candidates = fullConfig.windows.filter(w => allowed.includes(String(w.id || w.windowId || w.title)));
+            }
+            const firstWin = candidates[0] || fullConfig.windows[0];
             const lw = window.loadWindow || (typeof loadWindow !== 'undefined' ? loadWindow : null);
-            if (lw) lw(fullConfig.windows[0]); else console.error('loadWindow not available');
+            if (lw && firstWin) lw(firstWin); else console.error('loadWindow not available');
         }
 
     } catch (e) {
         console.error(e);
-        alert('Ошибка загрузки: ' + e.message);
+        showToast('Ошибка загрузки: ' + e.message, 'error');
     }
 }
 
@@ -244,42 +347,71 @@ async function loadWindow(winConfig) {
         // Normalize config shape to support different config variants (dataSource vs top-level, grid array vs obj, form vs insert/update)
         currentWindowConfig = (window.normalizeWindowConfig || normalizeWindowConfig)(winConfig);
 
-        // Activate matching sidebar item for visual design state
-        try {
-            document.querySelectorAll('#window-list button').forEach(b => b.classList.remove('bg-slate-800', 'active'));
-            const btns = document.querySelectorAll('#window-list button');
-            for (const b of btns) {
-                if (b.textContent && b.textContent.indexOf(currentWindowConfig.title) !== -1) {
-                    b.classList.add('bg-slate-800');
-                    break;
-                }
-            }
-        } catch(e){}
+        // DYNAMIC: update top title so user always sees which window is active
+        const topTitle = document.getElementById('window-title');
+        if (topTitle) {
+            topTitle.textContent = currentWindowConfig.title || fullConfig?.title || 'GTerminalPro';
+        }
+
+        // Rebuild sidebar list with correct active highlight (makes slide/selection feel dynamic and correct)
+        if (typeof refreshWindowList === 'function') {
+            refreshWindowList();
+        }
         currentResults = [];
         selectedRow = null;
 
         const container = document.getElementById('current-window');
-        const canInsert = !!(currentWindowConfig.insert || currentWindowConfig.form);
-        const canUpdate = !!(currentWindowConfig.update || currentWindowConfig.form);
-        const canDelete = !!(currentWindowConfig.delete || currentWindowConfig.dataSource?.primaryKey);
+        const winIdStr = String(currentWindowConfig.id || currentWindowConfig.windowId || currentWindowConfig.title || '');
+        const userInsert = !currentUser || currentUser.role === 'ADMIN' || (currentUser.insertAccess || '').split(',').map(s => s.trim()).includes(winIdStr);
+        const userUpdate = !currentUser || currentUser.role === 'ADMIN' || (currentUser.updateAccess || '').split(',').map(s => s.trim()).includes(winIdStr);
+        const userDelete = !currentUser || currentUser.role === 'ADMIN' || (currentUser.deleteAccess || '').split(',').map(s => s.trim()).includes(winIdStr);
+
+        const hasInsert = !!(currentWindowConfig.insert || currentWindowConfig.form);
+        const hasUpdate = !!(currentWindowConfig.update || currentWindowConfig.form);
+        const hasDelete = !!(currentWindowConfig.delete || currentWindowConfig.dataSource?.primaryKey);
+
+        const canInsert = hasInsert && userInsert;
+        const canUpdate = hasUpdate && userUpdate;
+        const canDelete = hasDelete && userDelete;
+
+        currentWindowConfig._canInsert = canInsert;
+        currentWindowConfig._canUpdate = canUpdate;
+        currentWindowConfig._canDelete = canDelete;
+
+        let toolbarButtons = `
+                    <button onclick="performSearch()" class="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded-xl text-sm flex items-center gap-2">
+                        <i class="fas fa-search"></i> Поиск
+                    </button>`;
+
+        if (hasInsert) {
+            toolbarButtons += `
+                    <button onclick="showInsertForm()" class="bg-emerald-700 hover:bg-emerald-600 px-4 py-2 rounded-xl text-sm"` + (canInsert ? '' : ' disabled style="opacity:0.5" title="Функционал добавления не настроен или нет прав"') + '>Добавить</button>';
+        }
+
+        if (hasUpdate) {
+            toolbarButtons += `
+                    <button id="btn-update" disabled onclick="showUpdateForm()" class="bg-amber-700 hover:bg-amber-600 px-4 py-2 rounded-xl text-sm"` + (canUpdate ? '' : ' disabled style="opacity:0.5" title="Функционал изменения не настроен или нет прав"') + '>Изменить</button>';
+        }
+
+        if (hasDelete) {
+            toolbarButtons += `
+                    <button id="btn-delete" disabled onclick="deleteSelectedRow()" class="bg-red-600 hover:bg-red-500 px-4 py-2 rounded-xl text-sm"` + (canDelete ? '' : ' disabled style="opacity:0.5" title="Функционал удаления не настроен или нет прав"') + '>Удалить</button>';
+        }
+
+        toolbarButtons += `
+                    <button onclick="exportCurrentCsv()" class="bg-slate-700 hover:bg-slate-600 px-3 py-2 rounded-lg text-xs">CSV</button>
+                    <button onclick="exportCurrentXlsx()" class="bg-slate-700 hover:bg-slate-600 px-3 py-2 rounded-lg text-xs">XLSX</button>
+                    <button id="btn-filters" onclick="toggleFilters()" class="bg-purple-700 hover:bg-purple-600 px-3 py-2 rounded-lg text-xs flex items-center gap-1" style="display:none">
+                        <i class="fas fa-filter"></i> Фильтры
+                    </button>
+                    <span id="relation-buttons" class="flex gap-2 ml-1"></span>`;
 
         container.innerHTML = 
             '<div class="h-full flex flex-col">' +
             '<div class="flex justify-between items-center mb-3 pb-3 border-b border-slate-700">' +
                 '<h2 class="text-xl font-semibold text-slate-100">' + currentWindowConfig.title + '</h2>' +
                 '<div class="flex gap-2">' +
-                    '<button onclick="performSearch()" class="bg-sky-600 hover:bg-sky-500 px-4 py-2 rounded-xl text-sm flex items-center gap-2">' +
-                        '<i class="fas fa-search"></i> Поиск' +
-                    '</button>' +
-                    '<button onclick="showInsertForm()" class="bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded-xl text-sm"' + (canInsert ? '' : ' disabled style="opacity:0.5" title="Нет настройки вставки"') + '>Добавить</button>' +
-                    '<button id="btn-update" disabled onclick="showUpdateForm()" class="bg-amber-600 hover:bg-amber-500 px-4 py-2 rounded-xl text-sm">Изменить</button>' +
-                    '<button id="btn-delete" disabled onclick="deleteSelectedRow()" class="bg-red-600 hover:bg-red-500 px-4 py-2 rounded-xl text-sm">Удалить</button>' +
-                    '<button onclick="exportCurrentCsv()" class="bg-slate-700 hover:bg-slate-600 px-3 py-2 rounded-lg text-xs">CSV</button>' +
-                    '<button onclick="exportCurrentXlsx()" class="bg-slate-700 hover:bg-slate-600 px-3 py-2 rounded-lg text-xs">XLSX</button>' +
-                    '<button id="btn-filters" onclick="toggleFilters()" class="bg-purple-700 hover:bg-purple-600 px-3 py-2 rounded-lg text-xs flex items-center gap-1" style="display:none">' +
-                        '<i class="fas fa-filter"></i> Фильтры' +
-                    '</button>' +
-                    '<span id="relation-buttons" class="flex gap-2 ml-1"></span>' +
+                    toolbarButtons +
                 '</div>' +
             '</div>' +
 
@@ -293,7 +425,7 @@ async function loadWindow(winConfig) {
 
             '<div class="bg-slate-800 border border-slate-700 flex flex-col flex-1 min-h-0 overflow-hidden">' +
                 '<div class="px-4 py-2 border-b border-slate-700 bg-slate-800 text-xs font-medium text-slate-400 flex items-center justify-between">' +
-                    '<div>Результаты <span id="row-count" class="text-sky-400 font-semibold">(0)</span></div>' +
+                    '<div>Результаты <span id="row-count" class="text-blue-400 font-semibold">(0)</span></div>' +
                 '</div>' +
                 '<div class="flex-1 overflow-auto custom-scroll" id="table-scroll-container" style="scrollbar-gutter: stable;">' +
                     '<table id="results-table" class="w-full border-collapse hidden min-w-full">' +
@@ -329,6 +461,12 @@ async function loadWindow(winConfig) {
         renderRelationButtons();
         // master context banner removed per user request
 
+        // Initially disable update/delete until a row is selected (only if buttons exist)
+        const btnUpdate = document.getElementById('btn-update');
+        const btnDelete = document.getElementById('btn-delete');
+        if (btnUpdate) btnUpdate.disabled = true;
+        if (btnDelete) btnDelete.disabled = true;
+
         // NOTE: NO auto performSearch — user must click "Поиск" manually to load data.
         // Only auto for master-detail context when relevant.
         setTimeout(() => {
@@ -360,7 +498,7 @@ function renderFilters(winConfig) {
         html += '<option value="<">&lt; меньше</option><option value="<=">&lt;= меньше/равно</option>';
         html += '<option value="IN">IN список</option><option value="NOT LIKE">не содержит</option>';
         html += '</select>';
-        html += '<input type="text" id="fval-' + f.field + '" class="flex-1 bg-slate-700 border border-slate-600 rounded-lg px-2 py-1 text-sm focus:border-cyan-400" placeholder="значение...">';
+        html += '<input type="text" id="fval-' + f.field + '" class="flex-1 bg-slate-700 border border-slate-600 rounded-lg px-2 py-1 text-sm focus:border-blue-500" placeholder="значение...">';
         html += '</div></div>';
     });
     div.innerHTML = html;
@@ -380,6 +518,19 @@ function toggleFilters() {
     }
 }
 
+function injectWhere(baseSql, whereStr) {
+    if (!whereStr) return baseSql;
+    let sql = baseSql.trim().replace(/;\s*$/, ''); // remove trailing ;
+    // Find the first position of post-WHERE clauses (ORDER/GROUP/HAVING/LIMIT)
+    const clauseRegex = /\s(ORDER BY|GROUP BY|HAVING|LIMIT)\b/i;
+    const match = clauseRegex.exec(sql);
+    let insertPos = sql.length;
+    if (match) insertPos = match.index;
+    const hasWhere = /\bWHERE\b/i.test(sql);
+    const connector = hasWhere ? ' AND ' : ' WHERE ';
+    return sql.slice(0, insertPos) + connector + whereStr + sql.slice(insertPos);
+}
+
 async function performSearch() {
     if (!currentWindowConfig || !dbReady) {
         // silent for initial auto-load (db opens slightly after first window render)
@@ -396,7 +547,7 @@ async function performSearch() {
         const tbl = currentWindowConfig.table || currentWindowConfig.dataSource?.table;
         if (tbl) sql = 'SELECT * FROM ' + tbl;
     }
-    if (!sql) return alert('Нет SQL запроса в конфиге окна');
+    if (!sql) { showToast('Нет SQL запроса в конфиге окна', 'error'); return; }
 
     const params = [];
     let where = [];
@@ -461,21 +612,19 @@ async function performSearch() {
         if (matchingRel) {
             const fk = matchingRel.childForeignKey || matchingRel.foreignKey;
             if (fk) {
-                const filterClause = where.length > 0 ? ' AND ' : ' WHERE ';
                 // Use param for safety
                 where.push(fk + ' = ?');
                 params.push(masterContext.value);
-                // We will prepend WHERE later
             }
         }
     }
 
     if (where.length > 0) {
-        const hasWhere = /where\s/i.test(sql);
-        sql += (hasWhere ? ' AND ' : ' WHERE ') + where.join(' AND ');
+        const whereStr = where.join(' AND ');
+        sql = injectWhere(sql, whereStr);
     }
 
-    // respect optional limit if present
+    // respect optional limit if present (append at very end)
     const lim = currentWindowConfig.dataSource?.limit || currentWindowConfig.limit;
     if (lim && !/limit\s+\d+/i.test(sql)) sql += ' LIMIT ' + lim;
 
@@ -487,7 +636,7 @@ async function performSearch() {
         renderRelationButtons();
         // master context banner removed per user request
     } else {
-        alert('Ошибка:\n' + result.error);
+        showToast('Ошибка:\n' + result.error, 'error');
     }
 }
 
@@ -497,6 +646,11 @@ function renderTable() {
     const header = document.getElementById('table-header');
     const tbody = document.getElementById('table-body');
     const count = document.getElementById('row-count');
+
+    const btnUpdate = document.getElementById('btn-update');
+    const btnDelete = document.getElementById('btn-delete');
+    if (btnUpdate) btnUpdate.disabled = true;
+    if (btnDelete) btnDelete.disabled = true;
 
     count.textContent = '(' + currentResults.length + ')';
 
@@ -522,7 +676,7 @@ function renderTable() {
 
     columns.forEach(col => {
         const th = document.createElement('th');
-        th.className = "px-4 py-3 text-left text-xs font-medium text-cyan-300 border-b border-slate-700";
+        th.className = "px-4 py-3 text-left text-xs font-medium text-blue-300 border-b border-slate-700";
         th.textContent = (col && (col.title || col.field)) || '';
         header.appendChild(th);
     });
@@ -537,6 +691,9 @@ function renderTable() {
         tr.onclick = () => selectRow(tr, row);
         tr.ondblclick = () => showDetails(row);
 
+        // NEW: configurable row formatting (constructive, per-window)
+        applyRowFormatting(tr, row);
+
         columns.forEach(col => {
             const td = document.createElement('td');
             td.className = "px-4 py-2 text-sm";
@@ -549,6 +706,52 @@ function renderTable() {
 
     // Pagination
     renderPagination(currentResults.length, pageSize);
+}
+
+function applyRowFormatting(tr, row) {
+    if (!tr || !row || !currentWindowConfig) return;
+
+    const rules = currentWindowConfig.rowFormatting || [];
+    if (!Array.isArray(rules) || rules.length === 0) return;
+
+    rules.forEach(rule => {
+        if (!rule || rule.enabled === false) return;
+        const field = rule.field;
+        if (!field) return;
+
+        const val = row[field];
+        const op = rule.operator || 'notEmpty';
+        const compareVal = rule.value;
+
+        let matches = false;
+
+        if (op === 'notEmpty' || op === 'isNotNull') {
+            matches = val != null && String(val).trim() !== '';
+        } else if (op === 'empty' || op === 'isNull') {
+            matches = val == null || String(val).trim() === '';
+        } else if (op === 'equals') {
+            matches = String(val) === String(compareVal || '');
+        } else if (op === 'notEquals') {
+            matches = String(val) !== String(compareVal || '');
+        } else if (op === 'contains') {
+            matches = String(val || '').toLowerCase().includes(String(compareVal || '').toLowerCase());
+        } else if (op === 'notContains') {
+            matches = !String(val || '').toLowerCase().includes(String(compareVal || '').toLowerCase());
+        } else if (op === 'gt' || op === 'greaterThan') {
+            matches = parseFloat(val) > parseFloat(compareVal);
+        } else if (op === 'lt' || op === 'lessThan') {
+            matches = parseFloat(val) < parseFloat(compareVal);
+        }
+
+        if (matches && rule.style && typeof rule.style === 'object') {
+            if (rule.style.border) tr.style.border = rule.style.border;
+            if (rule.style.backgroundColor || rule.style.background) tr.style.backgroundColor = rule.style.backgroundColor || rule.style.background;
+            if (rule.style.color) tr.style.color = rule.style.color;
+            if (rule.style.fontWeight) tr.style.fontWeight = rule.style.fontWeight;
+            // add class if provided for further CSS
+            if (rule.className) tr.classList.add(rule.className);
+        }
+    });
 }
 
 function renderPagination(total, pageSize) {
@@ -591,7 +794,7 @@ function renderPagination(total, pageSize) {
 function addPageBtn(pager, p) {
     const b = document.createElement('button');
     b.textContent = p;
-    b.className = 'px-2 py-0.5 rounded text-xs ' + (p === currentPage ? 'bg-sky-600 text-white' : 'bg-slate-700 hover:bg-slate-600');
+    b.className = 'px-2 py-0.5 rounded text-xs ' + (p === currentPage ? 'bg-blue-600 text-white' : 'bg-slate-700 hover:bg-slate-600');
     b.onclick = () => {
         currentPage = p;
         renderTable();
@@ -607,11 +810,13 @@ function addEllipsis(pager) {
 }
 
 function selectRow(tr, row) {
-    document.querySelectorAll('#table-body tr').forEach(r => r.classList.remove('bg-cyan-900/30'));
-    tr.classList.add('bg-cyan-900/30');
+    document.querySelectorAll('#table-body tr').forEach(r => r.classList.remove('bg-blue-900/30'));
+    tr.classList.add('bg-blue-900/30');
     selectedRow = row;
-    document.getElementById('btn-update').disabled = false;
-    document.getElementById('btn-delete').disabled = false;
+    const btnUpdate = document.getElementById('btn-update');
+    const btnDelete = document.getElementById('btn-delete');
+    if (btnUpdate) btnUpdate.disabled = !currentWindowConfig._canUpdate;
+    if (btnDelete) btnDelete.disabled = !currentWindowConfig._canDelete;
 
     // Set master context for master-detail relations
     const pk = currentWindowConfig.dataSource?.primaryKey ||
@@ -637,15 +842,15 @@ function showDetails(row) {
 
 async function showInsertForm() {
     if (!currentWindowConfig?.form && !currentWindowConfig?.insert) {
-        return alert('Форма добавления не настроена для этого окна');
+        showToast('Форма добавления не настроена для этого окна', 'error'); return;
     }
     showFormModal('insert');
 }
 
 async function showUpdateForm() {
-    if (!selectedRow) return alert('Выберите строку');
+    if (!selectedRow) { showToast('Выберите строку', 'error'); return; }
     if (!currentWindowConfig?.form && !currentWindowConfig?.update) {
-        return alert('Форма редактирования не настроена для этого окна');
+        showToast('Форма редактирования не настроена для этого окна', 'error'); return;
     }
     showFormModal('update', selectedRow);
 }
@@ -659,29 +864,35 @@ function showFormModal(mode, rowData = null) {
     } else {
         formConfig = currentWindowConfig.form;
     }
-    if (!formConfig) return alert('Форма не настроена');
+    if (!formConfig) { showToast('Форма не настроена', 'error'); return; }
 
     const isInsert = mode === 'insert';
     const title = isInsert ? 'Создание записи' : 'Редактирование записи';
+    const currentMode = isInsert ? 'insert' : 'update';
 
-    let html = '<div class="fixed inset-0 bg-black/80 flex items-center justify-center z-50" id="form-modal">' +
-        '<div class="bg-slate-900 rounded-3xl w-full max-w-5xl mx-4 max-h-[92vh] border border-slate-700 shadow-2xl flex flex-col">' +
-        '<div class="px-8 py-5 border-b border-slate-700 flex items-center justify-between bg-slate-950 flex-shrink-0">' +
-        '<h2 class="text-2xl font-semibold text-white">' + title + '</h2>' +
-        '<button onclick="closeFormModal()" class="text-4xl text-slate-400 hover:text-white leading-none">×</button>' +
+    let html = '<div class="fixed inset-0 bg-black/60 flex items-center justify-center z-50" id="form-modal">' +
+        '<div class="bg-slate-900 rounded-2xl w-full max-w-[720px] mx-4 max-h-[90vh] border border-slate-700 shadow-2xl flex flex-col overflow-hidden">' +
+        '<div class="px-5 py-3 border-b border-slate-700 flex items-center justify-between bg-slate-950/90 flex-shrink-0">' +
+        '<div class="flex items-center gap-2">' +
+        '<i class="fas ' + (isInsert ? 'fa-plus-circle text-emerald-400' : 'fa-edit text-amber-400') + '"></i>' +
+        '<h2 class="text-[15px] font-semibold text-slate-100 tracking-[-0.2px]">' + title + '</h2>' +
         '</div>' +
-        '<div class="p-3 flex-1 min-h-0 overflow-auto custom-scroll" id="form-scroll-area" style="scrollbar-gutter: stable;">' +
-        '<div class="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-3" id="form-fields"></div>' +
+        '<button onclick="closeFormModal()" class="w-8 h-8 flex items-center justify-center text-xl leading-none text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors">×</button>' +
         '</div>' +
-        '<div class="p-5 border-t border-slate-700 bg-slate-950 flex justify-end gap-3 flex-shrink-0">' +
-        '<button onclick="closeFormModal()" class="px-8 py-2.5 bg-slate-700 hover:bg-slate-600 rounded-2xl font-medium">Отмена</button>' +
-        '<button id="form-save-btn" onclick="' + (isInsert ? 'saveNewRecord()' : 'saveUpdatedRecord()') + '" class="px-8 py-2.5 bg-emerald-600 hover:bg-emerald-500 rounded-2xl font-semibold flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">' +
-        '<i class="fas fa-save"></i> ' + (isInsert ? 'Создать' : 'Сохранить') +
+        '<div class="p-5 flex-1 min-h-0 overflow-auto custom-scroll" id="form-scroll-area" style="scrollbar-gutter: stable;">' +
+        '<div class="grid grid-cols-1 gap-y-4" id="form-fields"></div>' +
+        '</div>' +
+        '<div class="px-5 py-3 border-t border-slate-700 bg-slate-950 flex justify-end gap-2 flex-shrink-0">' +
+        '<button onclick="closeFormModal()" class="px-4 py-1.5 text-sm font-medium text-slate-300 hover:text-white hover:bg-slate-800 border border-slate-700 rounded-xl transition-colors">Отмена</button>' +
+        '<button id="form-save-btn" onclick="' + (isInsert ? 'saveNewRecord()' : 'saveUpdatedRecord()') + '" class="px-5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold rounded-xl flex items-center gap-2 shadow-sm disabled:opacity-60 disabled:cursor-not-allowed transition-all">' +
+        '<i class="fas fa-save text-sm"></i> ' + (isInsert ? 'Создать' : 'Сохранить') +
         '</button>' +
         '</div>' +
         '</div></div>';
 
     document.body.insertAdjacentHTML('beforeend', html);
+
+    cleanupAllDropdowns();
 
     console.log('[form modal] opened for mode=', mode, 'formConfig fields with auto:', formConfig.fields.filter(f => f.systemVariable || f.autoValue).map(f => f.field));
 
@@ -727,14 +938,12 @@ function showFormModal(mode, rowData = null) {
                 }
             }
 
-            const readonly = isAuto ? 'readonly' : '';
+            const readonlyAttr = field.readonly ? 'readonly' : '';
+            const disabledAttr = field.disabled ? 'disabled' : '';
             const ph = field.placeholder ? ` placeholder="${field.placeholder}"` : '';
             const help = field.help ? ` title="${field.help}"` : '';
 
-            let wrapperClass = 'flex flex-col';
-            if (field.width === 'full') {
-                wrapperClass += ' md:col-span-2';
-            }
+            let wrapperClass = 'flex flex-col form-field';
             let controlStyle = '';
             if (field.width && field.width !== 'full') {
                 controlStyle += `width:${field.width};`;
@@ -748,19 +957,26 @@ function showFormModal(mode, rowData = null) {
                 dataAttrs = ` data-conditional-field="${field.conditional.field}" data-conditional-op="${field.conditional.op || '=='}" data-conditional-value="${(field.conditional.value || '').replace(/"/g,'&quot;')}" `;
             }
 
-            let fieldHtml = `<div class="${wrapperClass}" ${dataAttrs}><label class="text-sm text-slate-400 mb-2" ${help}>${field.title}${isAuto ? ' <span class="text-[10px] text-purple-400">(auto)</span>' : ''}</label>`;
+            const showOuterLabel = field.type !== 'checkbox';
+            let fieldHtml = `<div class="${wrapperClass}" ${dataAttrs}>`;
+            if (showOuterLabel) {
+                fieldHtml += `<label class="text-[13px] font-medium text-slate-300" ${help}>${field.title}${isAuto ? ' <span class="text-[10px] text-blue-400 font-normal">(авто)</span>' : ''}</label>`;
+            }
 
-            if (field.type === 'textarea') {
-                fieldHtml += `<textarea id="f-${field.field}" ${readonly}${ph}${styleAttr} class="bg-slate-800 border border-slate-600 rounded-2xl px-4 py-3 min-h-[100px]">${value}</textarea>`;
+            // Pure auto fields
+            if (isAuto) {
+                fieldHtml += `<input type="text" id="f-${field.field}" value="${value || ''}" ${readonlyAttr}${ph}${styleAttr} class="bg-slate-800 border border-slate-600 rounded-xl px-3 py-1.5 text-[13.5px] focus:border-blue-500 focus:ring-1 focus:ring-blue-500/30 transition-all" ${disabledAttr}>`;
+            } else if (field.type === 'textarea') {
+                fieldHtml += `<textarea id="f-${field.field}" ${readonlyAttr}${ph}${styleAttr} class="bg-slate-800 border border-slate-600 rounded-xl px-3 py-2 text-[13.5px] min-h-[68px] focus:border-blue-500 focus:ring-1 focus:ring-blue-500/30 transition-all" ${disabledAttr}>${value}</textarea>`;
             } else if (field.type === 'checkbox') {
                 const checked = isCheckboxCheckedFromValue(field, value) ? 'checked' : '';
-                fieldHtml += `<label class="flex items-center gap-3 cursor-pointer"><input type="checkbox" id="f-${field.field}" ${checked} class="w-5 h-5 accent-cyan-500"><span>${field.title}</span></label>`;
+                fieldHtml += `<label class="flex items-center gap-2 cursor-pointer text-sm"><input type="checkbox" id="f-${field.field}" ${checked} class="w-4 h-4 accent-blue-500" ${readonlyAttr} ${disabledAttr}><span class="text-slate-300">${field.title}</span></label>`;
             } else if (field.type === 'select' && !field.searchable) {
                 let selectContent = '';
                 if (value != null && value !== '') {
                     selectContent = `<option value="${value}">${value}</option>`;
                 }
-                fieldHtml += `<select id="f-${field.field}"${styleAttr} class="bg-slate-800 border border-slate-600 rounded-2xl px-4 py-3"${ph}>${selectContent}</select>`;
+                fieldHtml += `<select id="f-${field.field}"${styleAttr} class="bg-slate-800 border border-slate-600 rounded-xl px-3 py-1.5 text-[13.5px] focus:border-blue-500 focus:ring-1 focus:ring-blue-500/30 transition-all"${ph} ${readonlyAttr} ${disabledAttr}>${selectContent}</select>`;
             } else if (field.type === 'lookup' || (field.type === 'select' && field.searchable)) {
                 const dlId = 'dl-' + field.field;
                 let dlContent = '';
@@ -768,14 +984,65 @@ function showFormModal(mode, rowData = null) {
                     dlContent = `<option value="${value}"></option>`;
                 }
                 const searchableClass = (field.type === 'select' && field.searchable) ? ' searchable-select' : '';
-                const searchablePh = (field.type === 'select' && field.searchable && !field.placeholder) ? ` placeholder="печатайте для поиска в списке..."` : ph;
-                fieldHtml += `<input type="text" id="f-${field.field}" list="${dlId}" class="bg-slate-800 border border-slate-600 rounded-2xl px-4 py-3${searchableClass}"${styleAttr}${searchablePh} value="${value || ''}"><datalist id="${dlId}">${dlContent}</datalist>`;
+                const searchablePh = (field.type === 'select' && field.searchable && !field.placeholder) ? ` placeholder="Поиск..."` : ph;
+                fieldHtml += `<input type="text" id="f-${field.field}" list="${dlId}" class="bg-slate-800 border border-slate-600 rounded-xl px-3 py-1.5 text-[13.5px]${searchableClass} focus:border-blue-500 focus:ring-1 focus:ring-blue-500/30 transition-all"${styleAttr}${searchablePh} value="${value || ''}" ${readonlyAttr} ${disabledAttr}><datalist id="${dlId}">${dlContent}</datalist>`;
             } else {
-                fieldHtml += `<input type="text" id="f-${field.field}" value="${value}" ${readonly}${ph}${styleAttr} class="bg-slate-800 border border-slate-600 rounded-2xl px-4 py-3">`;
+                fieldHtml += `<input type="text" id="f-${field.field}" value="${value}" ${readonlyAttr}${ph}${styleAttr} class="bg-slate-800 border border-slate-600 rounded-xl px-3 py-1.5 text-[13.5px] focus:border-blue-500 focus:ring-1 focus:ring-blue-500/30 transition-all" ${disabledAttr}>`;
             }
-            fieldHtml += '</div>';
-            fieldHtml += `<div id="err-${field.field}" class="text-red-400 text-xs mt-1 min-h-[16px]"></div>`;
+
+            // Error message inside the same grid item (fixes broken grid layout)
+            fieldHtml += `<div id="err-${field.field}" class="text-red-400 text-[10.5px] mt-0.5 min-h-[14px] font-medium"></div>`;
+            fieldHtml += `</div>`;
+
             container.insertAdjacentHTML('beforeend', fieldHtml);
+        }
+
+        // Attach searchable dropdown listeners as early as possible so selector works
+        // even when opening form and interacting quickly (before full lookups)
+        setupAllCustomDropdowns(formConfig ? formConfig.fields : []);
+
+        // Custom form buttons — placed cleanly above/below the field grid
+        const buttonsForThisMode = (currentWindowConfig.formCustomButtons || []).filter(btn => {
+          const modes = Array.isArray(btn.modes) && btn.modes.length > 0 ? btn.modes : ['insert', 'update'];
+          return modes.includes(currentMode);
+        });
+
+        if (buttonsForThisMode.length > 0) {
+          const topContainer = document.createElement('div');
+          topContainer.className = 'mb-3 flex gap-2 flex-wrap';
+          const bottomContainer = document.createElement('div');
+          bottomContainer.className = 'mt-3 flex gap-2 flex-wrap';
+
+          buttonsForThisMode.forEach(btn => {
+            const b = document.createElement('button');
+            b.textContent = btn.label;
+            let styleStr = 'text-xs px-3 py-1 rounded-lg font-medium transition-all active:scale-[0.985]';
+            if (btn.style) {
+              if (btn.style.bg) b.style.backgroundColor = btn.style.bg;
+              if (btn.style.color) b.style.color = btn.style.color;
+              if (btn.style.width && btn.style.width !== 'auto') b.style.width = btn.style.width;
+              if (btn.style.height && btn.style.height !== 'auto') b.style.height = btn.style.height;
+            } else {
+              styleStr += ' bg-blue-600 hover:bg-blue-500 text-white';
+            }
+            b.className = styleStr;
+            b.onclick = () => handleCustomFormButton(btn, isInsert, formConfig);
+
+            const pos = btn.position || 'top';
+            if (pos === 'bottom') {
+              bottomContainer.appendChild(b);
+            } else {
+              topContainer.appendChild(b);
+            }
+          });
+
+          const formScroll = document.getElementById('form-scroll-area') || container.parentNode;
+          if (topContainer.children.length > 0) {
+            formScroll.insertBefore(topContainer, container);
+          }
+          if (bottomContainer.children.length > 0) {
+            formScroll.appendChild(bottomContainer);
+          }
         }
 
         // Simple conditional visibility support (super config)
@@ -813,6 +1080,7 @@ function showFormModal(mode, rowData = null) {
         Object.keys(autoComputed).forEach(fieldName => {
             const el = document.getElementById('f-' + fieldName);
             const v = autoComputed[fieldName];
+            const fieldDef = (formConfig && formConfig.fields) ? formConfig.fields.find(f => f.field === fieldName) : null;
             if (el && v != null) {
                 if (el.tagName === 'SELECT') {
                     let hasOption = false;
@@ -828,9 +1096,11 @@ function showFormModal(mode, rowData = null) {
                         opt.textContent = v;
                         el.appendChild(opt);
                     }
-                    el.value = v;
+                    setFormInputValue(el, v, false);
+                    if (fieldDef && fieldDef.disabled) el.disabled = true;
                 } else {
-                    el.value = v;
+                    setFormInputValue(el, v, true);
+                    if (fieldDef && fieldDef.disabled) el.disabled = true;
                 }
             }
         });
@@ -842,7 +1112,9 @@ function showFormModal(mode, rowData = null) {
                 if (el) {
                     const val = await computeAutoValue(field);
                     if (val != null) {
-                        el.value = val;
+                        setFormInputValue(el, val, document.activeElement === el);
+                        if (field.disabled) el.disabled = true;
+                        if (field.readonly) el.readOnly = true;
                         console.log('[form force set auto] ', field.field, '=', val);
                     }
                 }
@@ -854,13 +1126,91 @@ function showFormModal(mode, rowData = null) {
             Object.keys(pendingFormPrefill).forEach(function(fld) {
                 const el = document.getElementById('f-' + fld);
                 if (el) {
-                    el.value = pendingFormPrefill[fld];
+                    setFormInputValue(el, pendingFormPrefill[fld], document.activeElement === el);
                     el.dispatchEvent(new Event('change'));
                 }
             });
         }
 
         setupLiveValidation(formConfig ? formConfig.fields : []);
+
+        // Auto-focus first field reliably. Use safe helper for caret.
+        setTimeout(() => {
+            const first = document.querySelector('#form-modal input:not([disabled]):not([type="checkbox"]), #form-modal select:not([disabled]), #form-modal textarea:not([disabled])');
+            if (first) {
+                setFormInputValue(first, first.value, true);
+                first.focus();
+                try {
+                    const len = first.value ? first.value.length : 0;
+                    first.setSelectionRange(len, len);
+                } catch (e) {}
+            }
+        }, 50);
+
+        // Global focusin handler to force caret on any input in this modal (after adding param, switching fields, etc.)
+        const modalEl = document.getElementById('form-modal');
+        if (modalEl) {
+          modalEl.addEventListener('focusin', (e) => {
+            const t = e.target;
+            if ((t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') && !t.disabled) {
+              setTimeout(() => {
+                if (document.getElementById('form-modal') && document.activeElement === t) {
+                  try {
+                    const l = t.value ? t.value.length : 0;
+                    t.setSelectionRange(l, l);
+                  } catch(e){}
+                }
+              }, 0);
+            }
+          }, true);
+        }
+
+        // On regaining window focus (e.g. after switching apps), re-ensure caret and dropdown readiness.
+        const handleWindowFocus = () => {
+            const modal = document.getElementById('form-modal');
+            if (!modal) {
+                window.removeEventListener('focus', handleWindowFocus);
+                return;
+            }
+            const active = document.activeElement;
+            if (active && modal.contains(active) && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) {
+                setTimeout(() => {
+                    if (document.getElementById('form-modal')) {
+                        // force body first to reset any dirty focus state from previous modals
+                        document.body.focus();
+                        setTimeout(() => {
+                            if (document.getElementById('form-modal')) {
+                                active.focus();
+                                try {
+                                    const len = active.value ? active.value.length : 0;
+                                    active.setSelectionRange(len, len);
+                                } catch(e){}
+                                // also make sure dropdown is ready if this is a searchable input
+                                if (active.classList.contains('searchable-select') || active.hasAttribute('list')) {
+                                    // the mousedown/focus listeners will handle showing
+                                }
+                            }
+                        }, 0);
+                    }
+                }, 0);
+            }
+        };
+        window.addEventListener('focus', handleWindowFocus);
+
+        // Force reset after modals/toasts or form switches so dropdowns work reliably (no need for alt-tab)
+        setTimeout(() => {
+          if (document.getElementById('form-modal')) {
+            document.body.focus();
+            const activeNow = document.activeElement;
+            if (activeNow && activeNow.tagName === 'INPUT' && document.getElementById('form-modal')) {
+              activeNow.focus();
+              try {
+                const l = activeNow.value ? activeNow.value.length : 0;
+                activeNow.setSelectionRange(l, l);
+              } catch(e){}
+            }
+          }
+        }, 30);
     }, 80);
 }
 
@@ -868,9 +1218,15 @@ async function loadAllLookups() {
     const formF = currentWindowConfig.form ? currentWindowConfig.form.fields : [];
     const insF = currentWindowConfig.insert ? currentWindowConfig.insert.fields || [] : [];
     const selectFields = [...formF, ...insF].filter(f => {
-      const hasLookupDef = !!(f.lookup?.sql || f.lookupQuery || f.lookupWindow || f.lookup?.window);
+      const hasLookupDef = !!(f.lookup?.sql || f.lookupQuery || f.lookupWindow || f.lookup?.window || (f.options && f.options.length) || (f.lookupConditions && f.lookupConditions.length));
       const hasDefaultSql = f.type === 'lookup' && typeof f.defaultValue === 'string' && f.defaultValue.trim().toLowerCase().startsWith('select ');
-      return (f.type === 'select' || f.type === 'lookup') && (hasLookupDef || hasDefaultSql);
+      const isPureAutoSql = !!(f.systemVariable || f.autoValue) && (
+        (f.autoValue && (f.autoValue.type === 'sql' || String(f.autoValue.query||'').trim())) ||
+        String(f.systemVariable || '').toLowerCase().includes('sql')
+      );
+      // skip lookup population for pure auto-sql fields (user puts lookupQuery by mistake for MAX+1 etc)
+      if (isPureAutoSql) return false;
+      return (f.type === 'select' || f.type === 'lookup') && (hasLookupDef || hasDefaultSql || (f.options && f.options.length) || (f.lookupConditions && f.lookupConditions.length));
     });
     for (const field of selectFields) {
         let sql = field.lookup?.sql || field.lookupQuery;
@@ -907,9 +1263,59 @@ async function loadAllLookups() {
             }
         }
 
-        if (!sql) continue;
         const el = document.getElementById('f-' + field.field);
         if (!el) continue;
+
+        // === РУЧНОЙ СПИСОК (static options) без базы ===
+        if (Array.isArray(field.options) && field.options.length > 0) {
+            const isLookupLike = field.type === 'lookup' || (field.type === 'select' && field.searchable);
+            if (isLookupLike) {
+                const dl = document.getElementById('dl-' + field.field);
+                if (dl) {
+                    dl.innerHTML = '';
+                    field.options.forEach(opt => {
+                        const v = (typeof opt === 'string') ? opt : (opt.value || '');
+                        const d = (typeof opt === 'string') ? opt : (opt.display || v);
+                        const o = document.createElement('option');
+                        o.value = v;
+                        if (d !== v) o.label = d;
+                        dl.appendChild(o);
+                    });
+                }
+            } else if (el.tagName === 'SELECT') {
+                el.innerHTML = '<option value="">— Выберите —</option>';
+                field.options.forEach(opt => {
+                    const v = (typeof opt === 'string') ? opt : (opt.value || '');
+                    const d = (typeof opt === 'string') ? opt : (opt.display || v);
+                    el.innerHTML += `<option value="${v}">${d}</option>`;
+                });
+            }
+            console.log('[lookup-static] populated', field.field, 'count=', field.options.length);
+
+            if (field.options.length === 1) {
+                const single = (typeof field.options[0]==='string') ? field.options[0] : field.options[0].value;
+                if (single && (!el.value || el.value === '')) el.value = String(single);
+                const dl2 = document.getElementById('dl-' + field.field);
+                if (dl2) dl2.innerHTML = '';
+                if (el.tagName === 'INPUT') el.removeAttribute('list');
+            }
+            continue; // static done, skip sql
+        }
+
+        if (!sql) continue;
+
+        // Prevent "Too few parameter values" errors:
+        // If the lookupQuery contains ? placeholders, it is almost always meant for cascading/dependsOn.
+        // On initial load (no parent value yet) we skip it to avoid crash; the dependent logic will populate when value arrives.
+        const paramCount = (sql.match(/\?/g) || []).length;
+        if (paramCount > 0) {
+            console.log('[lookup] skipping initial populate for parameterized query (dependsOn expected):', field.field);
+            const el = document.getElementById('f-' + field.field);
+            if (el && el.tagName === 'SELECT') {
+                el.innerHTML = '<option value="">— Выберите —</option>';
+            }
+            continue;
+        }
 
         try {
             const result = await window.electronAPI.getLookupData(sql);
@@ -936,6 +1342,25 @@ async function loadAllLookups() {
                     const display = row.display ?? row.disp ?? (row[keys[1]] !== undefined ? row[keys[1]] : value);
                     el.innerHTML += '<option value="' + value + '">' + display + '</option>';
                 });
+            }
+
+            // если 1 значение — авто + подавить список (оставляем для совместимости)
+            if (result && result.length === 1) {
+                try {
+                    const row0 = result[0];
+                    const k0 = Object.keys(row0);
+                    const singleVal = row0.value ?? row0.val ?? row0[k0[0]];
+                    if (singleVal != null && singleVal !== '') {
+                        if (!el.value || el.value === '') {
+                            setFormInputValue(el, String(singleVal), document.activeElement === el);
+                        }
+                        if (field.disabled) el.disabled = true;
+                        if (field.readonly) el.readOnly = true;
+                        const dl2 = document.getElementById('dl-' + field.field);
+                        if (dl2) dl2.innerHTML = '';
+                        if (el && el.tagName === 'INPUT') el.removeAttribute('list');
+                    }
+                } catch (_) {}
             }
         } catch (e) {
             console.error('Lookup error', e);
@@ -971,6 +1396,23 @@ function setupDependentLookups() {
                 if (display !== value && display != null) opt.label = display;
                 listEl.appendChild(opt);
             });
+
+            // Если cascading lookup вернул ровно 1 значение — автоподставляем и прячем список
+            if (rows && rows.length === 1 && targetEl) {
+                try {
+                    const r0 = rows[0];
+                    const kk = Object.keys(r0);
+                    const sv = r0.value ?? r0.val ?? r0[kk[0]];
+                    if (sv != null && sv !== '' && (!targetEl.value || targetEl.value === '')) {
+                        targetEl.value = String(sv);
+                        if (depField.disabled) targetEl.disabled = true;
+                        if (depField.readonly) targetEl.readOnly = true;
+                        if (listEl) listEl.innerHTML = '';
+                        if (targetEl.tagName === 'INPUT') targetEl.removeAttribute('list');
+                        console.log('[autofill-single-casc] 1 option auto set (no dropdown)', depField.field);
+                    }
+                } catch (_) {}
+            }
         }
 
         function populateSelect(selEl, rows, withPlaceholder = true) {
@@ -995,16 +1437,37 @@ function setupDependentLookups() {
 
                 const sourceVal = sourceEl.value;
 
+                // NEW: support conditional different queries based on dependsOn value
+                // Example: if City == "Երևան" use DISTRICTS, else normal query
+                let usedConditional = false;
+                if (sourceVal && Array.isArray(depField.lookupConditions)) {
+                  const match = depField.lookupConditions.find(c => String(c.value || '').trim() === String(sourceVal).trim());
+                  if (match && match.query) {
+                    sql = match.query;
+                    usedConditional = true;
+                  }
+                }
+
+                // Helper: repeat the source value for every ? in the query
+                // This allows complex CASE WHEN ? = 'val' ... or multiple uses in one SQL
+                function buildLookupParams(query, val) {
+                  if (!val) return [];
+                  const count = (query.match(/\?/g) || []).length;
+                  return count > 0 ? new Array(count).fill(val) : [];
+                }
+
                 // If explicit lookupQuery exists (best case for user's Armenia example)
                 if (sql && sourceVal) {
-                    // Execute with parameter
-                    const res = await window.electronAPI.getLookupData(sql, [sourceVal]);
+                    // Always compute params from the final sql (works for both normal cascading and conditional queries)
+                    const params = buildLookupParams(sql, sourceVal);
+                    const res = await window.electronAPI.getLookupData(sql, params);
                     if (isLookupTarget || (depField.type === 'select' && depField.searchable)) {
                         populateLookupList(targetListEl, res);
                     } else {
                         populateSelect(targetEl, res, true);
                     }
                     if (targetEl.value) setTimeout(() => targetEl.dispatchEvent(new Event('change')), 20);
+                    if (isLookupTarget) setTimeout(() => setupCustomSearchableDropdown(targetEl, depField), 40);
                     return;
                 }
 
@@ -1034,12 +1497,14 @@ function setupDependentLookups() {
                 }
 
                 if (sql && sourceVal) {
-                    const result = await window.electronAPI.getLookupData(sql, [sourceVal]);
+                    const params = buildLookupParams(sql, sourceVal);
+                    const result = await window.electronAPI.getLookupData(sql, params);
                     if (isLookupTarget || (depField.type === 'select' && depField.searchable)) {
                         populateLookupList(targetListEl, result);
                     } else {
                         populateSelect(targetEl, result, true);
                     }
+                    if (isLookupTarget) setTimeout(() => setupCustomSearchableDropdown(targetEl, depField), 40);
                 } else if (sql) {
                     // no value yet — load all or empty
                     await loadAllLookups();
@@ -1053,7 +1518,201 @@ function setupDependentLookups() {
 
         sourceEl.addEventListener('change', refresh);
         sourceEl.addEventListener('input', refresh);
+
+        // initial populate if parent already has value (e.g. on edit)
+        if (sourceEl.value) {
+          setTimeout(refresh, 50);
+        }
     });
+}
+
+/**
+ * Красивый кастомный выпадающий список с ПОИСКОМ и СКРОЛЛОМ (заменяет убогий datalist)
+ * Поддерживает ручные варианты и из БД.
+ */
+function setupCustomSearchableDropdown(inputEl, fieldCfg) {
+  if (!inputEl || inputEl.tagName !== 'INPUT') return;
+  if (inputEl.disabled || inputEl.readOnly) return;
+
+  // Clean previous handlers if re-setup (helps recover after modals / form switches)
+  if (inputEl._searchableHandlers) {
+    const h = inputEl._searchableHandlers;
+    inputEl.removeEventListener('focus', h.focus);
+    inputEl.removeEventListener('click', h.click);
+    inputEl.removeEventListener('input', h.input);
+    inputEl.removeEventListener('keydown', h.keydown);
+    if (inputEl._mousedownHandler) {
+      inputEl.removeEventListener('mousedown', inputEl._mousedownHandler);
+    }
+  }
+
+  // убираем нативный list
+  inputEl.removeAttribute('list');
+
+  let drop = null;
+  let allOpts = []; // [{value, display}]
+
+  function getAllOptions() {
+    allOpts = [];
+    // 1. из datalist (если уже наполнен)
+    const dl = document.getElementById('dl-' + fieldCfg.field);
+    if (dl && dl.options.length) {
+      Array.from(dl.options).forEach(o => {
+        if (o.value) allOpts.push({ value: o.value, display: o.label || o.value });
+      });
+    }
+    // 2. из field.options (ручной)
+    if ((!allOpts.length) && Array.isArray(fieldCfg.options)) {
+      allOpts = fieldCfg.options.map(o => typeof o === 'string' ? {value: o, display: o} : {value: o.value || '', display: o.display || o.value || ''});
+    }
+    return allOpts;
+  }
+
+  function renderDrop(filtered) {
+    // Close any current dropdown first
+    closeCurrentDropdown();
+
+    // Extra safety: remove any stray high-z dropdown divs
+    document.querySelectorAll('div.fixed.z-\\[99999\\]').forEach(d => d.remove());
+
+    if (!filtered || !filtered.length) return;
+
+    drop = document.createElement('div');
+    drop.className = 'fixed z-[99999] bg-slate-900 border border-slate-600 rounded-2xl shadow-2xl text-sm overflow-hidden';
+    drop.style.maxHeight = '260px';
+    drop.style.overflowY = 'auto';
+    drop.style.minWidth = Math.max(inputEl.offsetWidth, 220) + 'px';
+
+    const listWrap = document.createElement('div');
+    listWrap.className = 'py-1 custom-scroll';
+
+    filtered.forEach(item => {
+      const row = document.createElement('div');
+      row.className = 'px-3 py-[5px] hover:bg-slate-700 cursor-pointer flex items-center justify-between gap-3 text-slate-200';
+      row.innerHTML = `
+        <span class="font-medium">${item.display}</span>
+        ${item.display !== item.value ? `<span class="text-[10px] text-slate-500 font-mono">${item.value}</span>` : ''}
+      `;
+      row.onmousedown = (ev) => {
+        ev.preventDefault();
+        inputEl.value = item.value;
+        inputEl.dispatchEvent(new Event('input', {bubbles: true}));
+        inputEl.dispatchEvent(new Event('change', {bubbles: true}));
+        closeCurrentDropdown();
+        // Сразу убираем визуальный фокус после выбора — поле выглядит заполненным, а не "выбранным"
+        setTimeout(() => {
+          inputEl.blur();
+        }, 0);
+      };
+      listWrap.appendChild(row);
+    });
+
+    drop.appendChild(listWrap);
+
+    // позиционируем под инпутом (fixed — координаты viewport, без scrollY!)
+    const r = inputEl.getBoundingClientRect();
+    drop.style.left = r.left + 'px';
+    drop.style.top = (r.bottom + 3) + 'px';
+    drop.style.width = r.width + 'px';
+
+    document.body.appendChild(drop);
+
+    currentDrop = drop;
+    currentInputEl = inputEl;
+
+    // Make sure input stays focused and has caret even if previous modals left focus in bad state
+    inputEl.focus();
+    setTimeout(() => {
+      if (document.activeElement === inputEl) {
+        try {
+          const len = inputEl.value ? inputEl.value.length : 0;
+          inputEl.setSelectionRange(len, len);
+        } catch(e){}
+      }
+    }, 0);
+
+    // Use the permanent global closer (no per-instance accumulation)
+    installGlobalDropdownCloser();
+  }
+
+  function hideDrop() {
+    closeCurrentDropdown();
+  }
+
+  function doFilterAndShow() {
+    const q = (inputEl.value || '').toLowerCase().trim();
+    const opts = getAllOptions();
+    let f = opts;
+    if (q) {
+      f = opts.filter(op =>
+        (op.value || '').toLowerCase().includes(q) ||
+        (op.display || '').toLowerCase().includes(q)
+      );
+    }
+    if (f.length > 0) {
+      renderDrop(f);
+    } else {
+      hideDrop();
+    }
+  }
+
+  // События — показываем список при фокусе И клике (чтобы было видно)
+  const showAll = () => {
+    const opts = getAllOptions();
+    renderDrop(opts);
+    // Re-assert caret after dropdown appears (Electron caret visibility fix when switching fields)
+    setTimeout(() => {
+      if (document.activeElement === inputEl) {
+        try {
+          const len = inputEl.value ? inputEl.value.length : 0;
+          inputEl.setSelectionRange(len, len);
+        } catch(e){}
+      }
+    }, 0);
+  };
+  inputEl.addEventListener('focus', showAll);
+  inputEl.addEventListener('click', showAll);
+
+  // mousedown + focus + click to ensure the selector (dropdown) always shows when switching forms
+  // without needing to alt-tab to another app first
+  inputEl.addEventListener('mousedown', () => {
+    setTimeout(() => {
+      const opts = getAllOptions();
+      renderDrop(opts);
+    }, 0);
+  });
+
+  inputEl.addEventListener('input', () => {
+    doFilterAndShow();
+  });
+
+  // клавиатура минимально
+  inputEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') hideDrop();
+  });
+
+  // если при загрузке уже есть 1 вариант и пусто — подставить (уже делаем раньше)
+
+  // Extra: force caret on focus (helps after adding param / value set / switch)
+  inputEl.addEventListener('focus', () => {
+    setTimeout(() => {
+      if (document.activeElement === inputEl && document.getElementById('form-modal')) {
+        try {
+          const len = inputEl.value ? inputEl.value.length : 0;
+          inputEl.setSelectionRange(len, len);
+        } catch(e){}
+      }
+    }, 0);
+  });
+}
+
+// Вызываем после заполнения списков
+function setupAllCustomDropdowns(formFields) {
+  (formFields || []).forEach(f => {
+    if (f.type !== 'lookup' && !(f.type === 'select' && f.searchable)) return;
+    const el = document.getElementById('f-' + f.field);
+    if (el) setupCustomSearchableDropdown(el, f);
+  });
 }
 
 function closeFormModal() {
@@ -1063,6 +1722,319 @@ function closeFormModal() {
     if (pendingFormPrefill) {
         pendingFormPrefill = null;
     }
+    cleanupAllDropdowns();
+}
+
+function showToast(message, type = 'success', duration = 2500) {
+  const toast = document.createElement('div');
+  toast.className = `fixed bottom-4 right-4 px-4 py-3 rounded-xl shadow-xl z-[100000] text-sm font-medium flex items-center gap-2 transition-all ${
+    type === 'success' ? 'bg-emerald-600 text-white' : 
+    type === 'error' ? 'bg-red-600 text-white' : 
+    'bg-slate-700 text-white'
+  }`;
+  toast.innerHTML = `
+    <span>${message}</span>
+  `;
+  document.body.appendChild(toast);
+
+  // auto hide
+  setTimeout(() => {
+    toast.style.transition = 'all 0.3s ease';
+    toast.style.opacity = '0';
+    toast.style.transform = 'translateY(10px)';
+    setTimeout(() => toast.remove(), 300);
+  }, duration);
+
+  // click to dismiss
+  toast.onclick = () => toast.remove();
+}
+
+function setFormInputValue(el, val, preserveCaret = true) {
+  if (!el) return;
+  const wasFocused = document.activeElement === el;
+  const start = (wasFocused && preserveCaret) ? (el.selectionStart || 0) : 0;
+  el.value = (val != null ? String(val) : '');
+  if (wasFocused && preserveCaret) {
+    setTimeout(() => {
+      if (document.activeElement !== el) {
+        el.focus();
+      }
+      const len = el.value.length;
+      try {
+        el.setSelectionRange(Math.min(start, len), len);
+      } catch (e) {}
+    }, 0);
+  }
+}
+
+async function computeSetValueForSpec(spec) {
+  if (!spec) return '';
+  const type = (spec.valueType || spec.type || 'constant').toString();
+  if (type === 'empty' || type === 'null') return '';
+
+  if (type === 'constant') {
+    return spec.value != null ? String(spec.value) : '';
+  }
+
+  if (type === 'now' || type === 'NOW' || type === 'CURRENT_DATETIME') {
+    const now = new Date();
+    const fmt = spec.format || 'DD/MM/YYYY HH:mm:ss';
+    return formatDate(now, fmt);
+  }
+  if (type === 'today' || type === 'TODAY' || type === 'CURRENT_DATE') {
+    const now = new Date();
+    const fmt = spec.format || 'DD/MM/YYYY';
+    return formatDate(now, fmt);
+  }
+
+  if (type === 'fromForm' || type === 'copy' || type === 'field') {
+    const src = spec.sourceField || spec.source || spec.fieldSource;
+    if (!src) return '';
+    const el = document.getElementById('f-' + src);
+    return el ? (el.value || '') : '';
+  }
+
+  if (type === 'currentUser' || type === 'CURRENT_USER' || type === 'user') {
+    return (currentUser && currentUser.login) || (localStorage.getItem('currentUser') ? (JSON.parse(localStorage.getItem('currentUser')).login || 'system') : 'system');
+  }
+  if (type === 'currentUserId' || type === 'CURRENT_USER_ID' || type === 'userId') {
+    const u = (currentUser && currentUser.id) || (localStorage.getItem('currentUser') ? JSON.parse(localStorage.getItem('currentUser')).id : null);
+    return u != null ? String(u) : '';
+  }
+  if (type === 'uuid' || type === 'UUID') {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+      const r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+      return v.toString(16);
+    });
+  }
+
+  if (type === 'sql' || type === 'fromDB' || type === 'query') {
+    let q = (spec.query || '').trim();
+    if (!q) return '';
+    // resolve params
+    const params = [];
+    const pms = spec.paramSources || spec.params || spec.paramMappings || [];
+    for (const p of (Array.isArray(pms) ? pms : [])) {
+      if (!p) continue;
+      const kind = p.kind || p.type || 'field';
+      let v;
+      if (kind === 'literal' || kind === 'const' || kind === 'constant') {
+        v = (p.val != null ? p.val : (p.value != null ? p.value : ''));
+      } else {
+        const fname = p.name || p.field || p.val || p.value;
+        if (fname) {
+          const el = document.getElementById('f-' + fname);
+          v = el ? (el.value || '') : '';
+        }
+      }
+      params.push(v);
+    }
+    try {
+      const res = await window.electronAPI.executeQuery(q, params);
+      if (res && res.success && res.rows && res.rows.length > 0) {
+        const row = res.rows[0];
+        const firstVal = Object.values(row)[0];
+        return firstVal != null ? String(firstVal) : '';
+      }
+      return '';
+    } catch (e) {
+      console.error('[setFields sql] error', q, e);
+      showToast('Ошибка выполнения SQL в кнопке: ' + e.message, 'error');
+      return '';
+    }
+  }
+
+  // fallback legacy string value in spec
+  if (spec.value != null) {
+    if (spec.value === 'NOW' || spec.value === 'now') {
+      const now = new Date();
+      return formatDate(now, 'DD/MM/YYYY HH:mm:ss');
+    }
+    return String(spec.value);
+  }
+  return '';
+}
+
+async function handleCustomFormButton(btn, isInsert, formConfig) {
+  const action = btn.action || 'setFields';
+
+  if (action === 'setFields' || action === 'updateFields') {
+    // Rich support: array of specs with valueType, or legacy flat object
+    let rawSet = btn.set || btn.fields || {};
+    let specs = [];
+    if (Array.isArray(rawSet)) {
+      specs = rawSet;
+    } else if (rawSet && typeof rawSet === 'object') {
+      specs = Object.keys(rawSet).map(fld => {
+        const v = rawSet[fld];
+        if (v && typeof v === 'object') return { field: fld, ...v };
+        const isNow = (v === 'NOW' || v === 'now');
+        return { field: fld, valueType: isNow ? 'now' : 'constant', value: isNow ? '' : v };
+      });
+    }
+
+    for (const spec of specs) {
+      const val = await computeSetValueForSpec(spec);
+      const el = document.getElementById('f-' + spec.field);
+      if (el) {
+        setFormInputValue(el, (val != null ? val : ''), document.activeElement === el);
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        // ensure even disabled/readonly inputs get the value for save
+        if (el.disabled) el.disabled = false;
+      }
+    }
+
+    const willSave = !!btn.saveAfter || !!btn.autoSave;
+    showToast(willSave ? 'Значения установлены. Выполняется сохранение в БД...' : 'Значения установлены в форму. Нажмите Сохранить.');
+    if (willSave) {
+      setTimeout(() => {
+        try {
+          if (isInsert && typeof saveNewRecord === 'function') {
+            saveNewRecord();
+          } else if (typeof saveUpdatedRecord === 'function') {
+            saveUpdatedRecord();
+          }
+        } catch (e) { console.warn('auto-save after set failed', e); }
+      }, 80);
+    }
+  } else if (action === 'importExcel') {
+    try {
+      const filePath = await window.electronAPI.selectFile({
+        filters: [{ name: 'Excel Files', extensions: ['xlsx', 'xls'] }]
+      });
+      if (!filePath) return;
+
+      const defaultMap = btn.defaultCellMapping || btn.mapping || {};
+      const mapKeys = Object.keys(defaultMap || {});
+
+      if (mapKeys.length > 0) {
+        // Полностью автоматическое применение по маппингу, заданному в админке кнопки.
+        // Интерактивное окно "Сопоставление ячеек" полностью убрано.
+        // Алерт при отсутствии маппинга или пустом результате тоже убран.
+        const appliedCount = await applyImportedExcelCells(filePath, defaultMap);
+        if (appliedCount > 0) {
+          showToast(`Данные из Excel применены автоматически (${appliedCount} полей).`);
+        }
+        // если маппинг пустой или не применилось ничего — тихо выходим
+      } 
+      // отсутствие маппинга — ничего не делаем и не показываем алертов
+    } catch (e) {
+      showToast('Ошибка импорта Excel: ' + e.message, 'error');
+    }
+  } else if (action === 'exportExcel') {
+    try {
+      // Collect current form data
+      const formData = {};
+      const fieldsToUse = formConfig.fields || [];
+      fieldsToUse.forEach(f => {
+        const el = document.getElementById('f-' + f.field);
+        if (el) {
+          let val = '';
+          if (f.type === 'checkbox') {
+            val = el.checked ? (f.checkedValue || 'Y') : (f.uncheckedValue || '');
+          } else {
+            val = el.value || '';
+          }
+          formData[f.field] = val;
+        }
+      });
+
+      let exportRow = formData;
+      if (btn.mapping && Object.keys(btn.mapping).length > 0) {
+        // reverse mapping: formField -> excelCol
+        exportRow = {};
+        Object.keys(btn.mapping).forEach(formField => {
+          const excelCol = btn.mapping[formField];
+          exportRow[excelCol] = formData[formField] || '';
+        });
+      }
+
+      const filename = 'export_' + new Date().toISOString().slice(0,19).replace(/[-:]/g,'') + '.xlsx';
+      await window.electronAPI.exportXlsx([exportRow], filename);
+      showToast('Экспорт в Excel выполнен: ' + filename);
+    } catch (e) {
+      showToast('Ошибка экспорта в Excel: ' + e.message, 'error');
+    }
+  }
+}
+
+function showExcelMappingModal(rowData, formFields) {
+  const modal = document.createElement('div');
+  modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-[110]';
+  const excelCols = Object.keys(rowData);
+  let html = `<div class="bg-slate-800 border border-slate-600 rounded-2xl p-4 w-[500px] max-h-[80vh] overflow-auto">
+    <div class="font-semibold mb-2">Сопоставление колонок Excel → поля формы</div>`;
+  formFields.forEach(f => {
+    html += `<div class="flex items-center gap-2 mb-1">
+      <span class="w-32 text-xs">${f.field}</span>
+      <select id="map-${f.field}" class="flex-1 bg-slate-700 text-xs px-1 py-0.5 rounded">`;
+    excelCols.forEach(col => {
+      html += `<option value="${col}">${col}</option>`;
+    });
+    html += `</select>
+    </div>`;
+  });
+  html += `<div class="mt-2 flex gap-2">
+    <button id="apply-map" class="flex-1 bg-emerald-600 px-3 py-1 rounded text-sm">Применить</button>
+    <button id="cancel-map" class="flex-1 bg-slate-600 px-3 py-1 rounded text-sm">Отмена</button>
+  </div></div>`;
+  modal.innerHTML = html;
+  document.body.appendChild(modal);
+  modal.querySelector('#cancel-map').onclick = () => modal.remove();
+  modal.querySelector('#apply-map').onclick = () => {
+    formFields.forEach(f => {
+      const sel = modal.querySelector(`#map-${f.field}`);
+      if (sel) {
+        const col = sel.value;
+        const val = rowData[col];
+        const el = document.getElementById('f-' + f.field);
+        if (el) {
+          el.value = val != null ? val : '';
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+      }
+    });
+    modal.remove();
+    showToast('Данные из Excel применены.');
+  };
+}
+
+/**
+ * Применяет преднастроенный маппинг ячеек Excel → поля формы.
+ * Используется для автоматического импорта когда маппинг задан в админке кнопки.
+ */
+async function applyImportedExcelCells(filePath, fieldToCellMap) {
+  let applied = 0;
+  for (const [fld, cell] of Object.entries(fieldToCellMap || {})) {
+    const cellRef = (cell || '').toString().trim().toUpperCase();
+    if (!cellRef) continue;
+    try {
+      const val = await window.electronAPI.readExcelCell(filePath, cellRef);
+      const el = document.getElementById('f-' + fld);
+      if (el) {
+        el.value = val != null ? val : '';
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        applied++;
+      }
+    } catch (e) {
+      console.error('Excel cell apply error', fld, cellRef, e);
+    }
+  }
+  return applied;
+}
+
+function getLanguageDisplayName(lang) {
+    const names = {
+        'armenian': 'армянские буквы',
+        'armenian_alphanumeric': 'армянские буквы, цифры и символы',
+        'latin': 'латинские буквы',
+        'latin_alphanumeric': 'латинские буквы, цифры и символы',
+        'cyrillic': 'кириллические буквы',
+        'cyrillic_alphanumeric': 'кириллические буквы, цифры и символы',
+        'digits': 'только цифры',
+        'alphanumeric': 'латинские буквы и цифры'
+    };
+    return names[lang] || lang;
 }
 
 async function validateField(field, value) {
@@ -1077,7 +2049,7 @@ async function validateField(field, value) {
             }
         }
 
-        if (v.type === 'length') {
+        if (v.type === 'length' || v.type === 'minmax') {
             const len = strVal.length;
             if (v.exact != null && len !== v.exact) {
                 errors.push(v.error || 'Длина должна быть ровно ' + v.exact + ' символов');
@@ -1091,40 +2063,43 @@ async function validateField(field, value) {
             }
         }
 
-        if (v.type === 'language' && v.language) if (v.type === 'language' && v.language) {
+        if (v.type === 'pattern' && v.pattern) {
+            try {
+                const re = new RegExp(v.pattern);
+                if (strVal && !re.test(strVal)) {
+                    errors.push(v.error || 'Не соответствует формату');
+                }
+            } catch (e) {
+                errors.push(v.error || 'Неверный формат регулярного выражения');
+            }
+        }
 
-    let regex = null;
-    const lang = v.language;
+        if (v.type === 'language' && v.language) {
+            let regex = null;
+            const lang = v.language;
 
-    if (lang === 'armenian')
-        regex = /^[\u0531-\u0556\u0561-\u0587\s]+$/;
+            if (lang === 'armenian')
+                regex = /^[\u0531-\u0556\u0561-\u0587\s]+$/;
+            else if (lang === 'armenian_alphanumeric')
+                regex = /^[\u0531-\u0556\u0561-\u05870-9\s.,\-_/()@#$%&+:]+$/;
+            else if (lang === 'latin')
+                regex = /^[A-Za-z\s]+$/;
+            else if (lang === 'latin_alphanumeric')
+                regex = /^[A-Za-z0-9\s.,\-_/()@#$%&+:]+$/;
+            else if (lang === 'cyrillic')
+                regex = /^[\u0400-\u04FF\s]+$/;
+            else if (lang === 'cyrillic_alphanumeric')
+                regex = /^[\u0400-\u04FF0-9\s.,\-_/()@#$%&+:]+$/;
+            else if (lang === 'digits')
+                regex = /^\d+$/;
+            else if (lang === 'alphanumeric')
+                regex = /^[A-Za-z0-9\s]+$/;
 
-    else if (lang === 'armenian_alphanumeric')
-        regex = /^[\u0531-\u0556\u0561-\u05870-9\s.,\-_/()@#$%&+:]+$/;
-
-    else if (lang === 'latin')
-        regex = /^[A-Za-z\s]+$/;
-
-    else if (lang === 'latin_alphanumeric')
-        regex = /^[A-Za-z0-9\s.,\-_/()@#$%&+:]+$/;
-
-    else if (lang === 'cyrillic')
-        regex = /^[\u0400-\u04FF\s]+$/;
-
-    else if (lang === 'cyrillic_alphanumeric')
-        regex = /^[\u0400-\u04FF0-9\s.,\-_/()@#$%&+:]+$/;
-
-    else if (lang === 'digits')
-        regex = /^\d+$/;
-
-    else if (lang === 'alphanumeric')
-        regex = /^[A-Za-z0-9\s]+$/;
-
-    // <<< ЭТО ОБЯЗАТЕЛЬНО !!!
-    if (regex && !regex.test(strVal)) {
-        errors.push(v.error || ('Поле должно содержать только ' + lang));
-    }
-}
+            if (regex && !regex.test(strVal)) {
+                const display = getLanguageDisplayName(lang);
+                errors.push(v.error || ('Поле должно содержать только ' + display));
+            }
+        }
 
         if (v.type === 'position' && v.value) {
             const start = (v.start || 1) - 1; // 1-based to 0-based
@@ -1146,16 +2121,29 @@ async function validateField(field, value) {
                     errors.push(v.error || 'Условие не выполнено');
                 }
             } catch (e) {
-                // already handled in sync
+                errors.push(v.error || 'Ошибка в условии валидации');
             }
         }
 
         if ((v.type === 'unique' || v.type === 'custom') && v.query) {
-            if (strVal) {
+            if (strVal || (v.fields && v.fields.length)) {
                 try {
-                    const res = await window.electronAPI.executeQuery(v.query, [value]);
+                    let params = [value];
+                    if (v.fields && Array.isArray(v.fields) && v.fields.length > 0) {
+                        params = v.fields.map(fldName => {
+                            const fel = document.getElementById('f-' + fldName);
+                            if (fel) {
+                                if (fel.type === 'checkbox' || field.type === 'checkbox') {
+                                    return fel.checked ? (field.checkedValue || 'Y') : (field.uncheckedValue || '');
+                                }
+                                return fel.value;
+                            }
+                            return value; // fallback
+                        });
+                    }
+                    const res = await window.electronAPI.executeQuery(v.query, params);
                     if (res.success && res.rows && res.rows.length > 0) {
-                        errors.push(v.error || 'Значение не прошло проверку');
+                        errors.push(v.error || 'Ошибка уникальности');
                     }
                 } catch (e) {
                     errors.push(v.error || 'Ошибка выполнения проверки');
@@ -1175,13 +2163,24 @@ function syncValidateField(field, value) {
             errors.push(v.error || 'Поле обязательно');
         }
 
-        if (v.type === 'length') {
+        if (v.type === 'length' || v.type === 'minmax') {
             const len = strVal.length;
             if (v.exact != null && len !== v.exact) {
                 errors.push(v.error || 'Длина должна быть ровно ' + v.exact + ' символов');
             } else {
                 if (v.min != null && len < v.min) errors.push(v.error || 'Минимум ' + v.min + ' символов');
                 if (v.max != null && len > v.max) errors.push(v.error || 'Максимум ' + v.max + ' символов');
+            }
+        }
+
+        if (v.type === 'pattern' && v.pattern) {
+            try {
+                const re = new RegExp(v.pattern);
+                if (strVal && !re.test(strVal)) {
+                    errors.push(v.error || 'Не соответствует формату');
+                }
+            } catch (e) {
+                errors.push(v.error || 'Неверный формат регулярного выражения');
             }
         }
 
@@ -1198,39 +2197,31 @@ function syncValidateField(field, value) {
         }
 
         if (v.type === 'language' && v.language) {
+            let regex = null;
+            const lang = v.language;
 
-    let regex = null;
-    const lang = v.language;
+            if (lang === 'armenian')
+                regex = /^[\u0531-\u0556\u0561-\u0587\s]+$/;
+            else if (lang === 'armenian_alphanumeric')
+                regex = /^[\u0531-\u0556\u0561-\u05870-9\s.,\-_/()@#$%&+:]+$/;
+            else if (lang === 'latin')
+                regex = /^[A-Za-z\s]+$/;
+            else if (lang === 'latin_alphanumeric')
+                regex = /^[A-Za-z0-9\s.,\-_/()@#$%&+:]+$/;
+            else if (lang === 'cyrillic')
+                regex = /^[\u0400-\u04FF\s]+$/;
+            else if (lang === 'cyrillic_alphanumeric')
+                regex = /^[\u0400-\u04FF0-9\s.,\-_/()@#$%&+:]+$/;
+            else if (lang === 'digits')
+                regex = /^\d+$/;
+            else if (lang === 'alphanumeric')
+                regex = /^[A-Za-z0-9\s]+$/;
 
-    if (lang === 'armenian')
-        regex = /^[\u0531-\u0556\u0561-\u0587\s]+$/;
-
-    else if (lang === 'armenian_alphanumeric')
-        regex = /^[\u0531-\u0556\u0561-\u05870-9\s.,\-_/()@#$%&+:]+$/;
-
-    else if (lang === 'latin')
-        regex = /^[A-Za-z\s]+$/;
-
-    else if (lang === 'latin_alphanumeric')
-        regex = /^[A-Za-z0-9\s.,\-_/()@#$%&+:]+$/;
-
-    else if (lang === 'cyrillic')
-        regex = /^[\u0400-\u04FF\s]+$/;
-
-    else if (lang === 'cyrillic_alphanumeric')
-        regex = /^[\u0400-\u04FF0-9\s.,\-_/()@#$%&+:]+$/;
-
-    else if (lang === 'digits')
-        regex = /^\d+$/;
-
-    else if (lang === 'alphanumeric')
-        regex = /^[A-Za-z0-9\s]+$/;
-
-    // <<< ЭТО ОБЯЗАТЕЛЬНО !!!
-    if (regex && !regex.test(strVal)) {
-        errors.push(v.error || ('Поле должно содержать только ' + lang));
-    }
-}
+            if (regex && !regex.test(strVal)) {
+                const display = getLanguageDisplayName(lang);
+                errors.push(v.error || ('Поле должно содержать только ' + display));
+            }
+        }
 
         if (v.type === 'position' && v.value) {
             const start = (v.start || 1) - 1;
@@ -1275,7 +2266,7 @@ function setupLiveValidation(fields) {
     if (!fields || !Array.isArray(fields)) return;
 
     fields.forEach(field => {
-        if (field.systemVariable || field.autoValue || field.hiddenInForm) return;
+        if (field.systemVariable || field.autoValue || field.hiddenInForm || field.disabled || field.readonly) return;
 
         const el = document.getElementById('f-' + field.field);
         const errEl = document.getElementById('err-' + field.field);
@@ -1322,7 +2313,7 @@ function setupLiveValidation(fields) {
         updateFormSaveButton();
         // Re-check after lookups populate selects
         fields.forEach(field => {
-            if (field.systemVariable || field.autoValue || field.hiddenInForm) return;
+            if (field.systemVariable || field.autoValue || field.hiddenInForm || field.disabled || field.readonly) return;
             const el = document.getElementById('f-' + field.field);
             if (el) {
                 const check = () => {
@@ -1477,6 +2468,10 @@ async function computeAutoValue(field) {
         if (!sql && type.startsWith('sql:')) {
             sql = type.substring(4).trim();
         }
+        // Fallback: user sometimes puts scalar SELECT (MAX+1) into lookupQuery + marks as sql auto. Support it for TerminalID case etc.
+        if (!sql && (field.lookupQuery || field.lookup?.sql) && (type.includes('sql') || type === 'sql' || !type)) {
+            sql = field.lookupQuery || (field.lookup && field.lookup.sql);
+        }
         if (sql) {
             console.log('[auto sql] executing for field', field.field, 'query:', sql);
             try {
@@ -1564,10 +2559,19 @@ function applyValueTransform(val, t) {
 }
 
 function applyTransforms(data, fields) {
-  for (const field of fields) {
-    if (field.transforms && Array.isArray(field.transforms) && data.hasOwnProperty(field.field)) {
+  for (const f of fields) {
+    let field = f;
+    if (!field.transforms || !Array.isArray(field.transforms) || field.transforms.length === 0) {
+      // lookup transforms from master fields if not present on this (e.g. insert.fields slim copy)
+      const master = (currentWindowConfig && (currentWindowConfig.fields || [])) || [];
+      const full = master.find(mf => mf.field === f.field);
+      if (full && full.transforms && full.transforms.length > 0) {
+        field = full;
+      }
+    }
+    if (field.transforms && Array.isArray(field.transforms) && data.hasOwnProperty(f.field)) {
       for (const t of field.transforms) {
-        data[field.field] = applyValueTransform(data[field.field], t);
+        data[f.field] = applyValueTransform(data[f.field], t);
       }
     }
   }
@@ -1688,7 +2692,7 @@ async function saveNewRecord() {
 
         const errs = await validateField(field, val);
         if (errs.length > 0) {
-            alert(errs[0]);
+            showToast(errs[0], 'error');
             return;
         }
         data[field.field] = val;
@@ -1726,7 +2730,7 @@ async function saveNewRecord() {
 
     const ins = currentWindowConfig.insert || {};
     const table = currentWindowConfig.insert?.table || currentWindowConfig.form?.table || ins.table || currentWindowConfig.dataSource?.table;
-    if (!table) return alert('Не указана таблица для вставки');
+    if (!table) { showToast('Не указана таблица для вставки', 'error'); return; }
 
     const columns = Object.keys(data).join(', ');
     const placeholders = Object.keys(data).map(() => '?').join(', ');
@@ -1734,10 +2738,10 @@ async function saveNewRecord() {
 
     const result = await window.electronAPI.executeQuery('INSERT INTO ' + table + ' (' + columns + ') VALUES (' + placeholders + ')', values);
     if (result.success) {
-        alert('✅ Запись успешно создана!');
+        showToast('✅ Запись успешно создана!');
         closeFormModal();
         performSearch();
-    } else alert('❌ Ошибка:\n' + result.error);
+    } else showToast('❌ Ошибка: ' + result.error, 'error');
 }
 
 async function saveUpdatedRecord() {
@@ -1750,7 +2754,7 @@ async function saveUpdatedRecord() {
                       currentWindowConfig.update.fields :
                       (currentWindowConfig.form && currentWindowConfig.form.fields) || [];
     const pk = currentWindowConfig.update?.keyField || currentWindowConfig.dataSource.primaryKey;
-    if (!pk) return alert('Не указан primaryKey для обновления');
+    if (!pk) { showToast('Не указан primaryKey для обновления', 'error'); return; }
     const pkValue = selectedRow[pk] ?? selectedRow[pk.toUpperCase()] ?? selectedRow[pk.toLowerCase()];
 
     // Set system / auto values first (for update)
@@ -1782,7 +2786,7 @@ async function saveUpdatedRecord() {
         }
         const errs = await validateField(field, val);
         if (errs.length > 0) {
-            alert(errs[0]);
+            showToast(errs[0], 'error');
             return;
         }
         data[field.field] = val;
@@ -1813,10 +2817,10 @@ async function saveUpdatedRecord() {
 
     const result = await window.electronAPI.executeQuery('UPDATE ' + table + ' SET ' + setParts + ' WHERE ' + pk + ' = ?', values);
     if (result.success) {
-        alert('✅ Запись успешно обновлена!');
+        showToast('✅ Запись успешно обновлена!');
         closeFormModal();
         performSearch();
-    } else alert('❌ Ошибка:\n' + result.error);
+    } else showToast('❌ Ошибка: ' + result.error, 'error');
 }
 
 // ==================== АДМИН + РЕДАКТОР ====================
@@ -1824,6 +2828,13 @@ async function saveUpdatedRecord() {
 async function openAdminWindow() {
     // Clean floating admin guide buttons when going back to list
     document.querySelectorAll('#admin-floating-guide').forEach(el => el.remove());
+
+    // Reflect admin mode in top title + clear any window active highlight in sidebar (dynamic feel)
+    const topTitle = document.getElementById('window-title');
+    if (topTitle) topTitle.textContent = 'Администрирование';
+    document.querySelectorAll('#window-list button').forEach(b => {
+      b.classList.remove('bg-slate-700', 'bg-blue-600', 'ring-1', 'ring-blue-400');
+    });
 
     const container = document.getElementById('current-window');
     const wins = (fullConfig && fullConfig.windows) ? fullConfig.windows : [];
@@ -1848,12 +2859,228 @@ async function openAdminWindow() {
         '</div></div>' +
         '<div class="flex items-center justify-between mb-3"><h3 class="text-lg font-semibold">Окна</h3></div>' +
         listHtml +
+        '<div class="mt-8">' +
+        '<div class="flex items-center justify-between mb-3"><h3 class="text-lg font-semibold">Пользователи</h3></div>' +
+        '<button onclick="showUsersManagement()" class="bg-emerald-600 hover:bg-emerald-500 px-4 py-1.5 rounded-xl text-sm font-semibold flex items-center gap-2"><i class="fas fa-users"></i> Управление пользователями</button>' +
+        '<div class="mt-2 text-xs text-slate-500">Добавляйте пользователей, задавайте роль и права доступа к окнам (WINDOWS_ACCESS, INSERT_ACCESS и т.д.)</div>' +
+        '</div>' +
         '<div class="mt-8 text-xs text-slate-500">Нажмите на окно, чтобы открыть его настройки. Кнопка «Гайд» доступна везде в админке.</div>' +
         '<button onclick="showAdminGuide()" class="fixed bottom-4 right-4 bg-slate-800 hover:bg-slate-700 border border-slate-600 text-sm px-3 py-1.5 rounded-full flex items-center gap-1 shadow-lg z-[100]" title="Открыть User Guide"><i class="fas fa-question-circle"></i> Гайд</button></div>';
 }
 
 if (typeof window !== 'undefined') {
   window.openAdminWindow = openAdminWindow;
+}
+
+async function showUsersManagement() {
+  const container = document.getElementById('current-window');
+  let users = [];
+  try {
+    users = await window.electronAPI.getUsers();
+  } catch (e) {
+    container.innerHTML = '<div class="p-6 text-red-400">Ошибка загрузки пользователей: ' + e.message + '</div>';
+    return;
+  }
+
+  let html = `
+    <div class="p-6 max-w-7xl mx-auto h-full overflow-auto custom-scroll">
+      <div class="flex items-center justify-between mb-4">
+        <div>
+          <button onclick="if(window.openAdminWindow) window.openAdminWindow();" class="text-xs px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded-xl mb-1">← В админ</button>
+          <h2 class="text-2xl font-bold text-white">Пользователи</h2>
+        </div>
+        <button onclick="addUser()" class="bg-emerald-600 hover:bg-emerald-500 px-4 py-1.5 rounded-xl text-sm font-semibold flex items-center gap-2"><i class="fas fa-user-plus"></i> + Добавить пользователя</button>
+      </div>
+
+      <table class="w-full text-sm">
+        <thead>
+          <tr>
+            <th class="px-3 py-2 text-left">ID</th>
+            <th class="px-3 py-2 text-left">LOGIN</th>
+            <th class="px-3 py-2 text-left">ROLE</th>
+            <th class="px-3 py-2 text-left">ACTIVE</th>
+            <th class="px-3 py-2 text-left">WINDOWS</th>
+            <th class="px-3 py-2 text-left">INSERT</th>
+            <th class="px-3 py-2 text-left">UPDATE</th>
+            <th class="px-3 py-2 text-left">DELETE</th>
+            <th class="px-3 py-2">Действия</th>
+          </tr>
+        </thead>
+        <tbody>
+  `;
+
+  users.forEach(u => {
+    html += `
+      <tr class="border-b border-slate-700 hover:bg-slate-800">
+        <td class="px-3 py-1.5">${u.ID}</td>
+        <td class="px-3 py-1.5 font-medium">${u.LOGIN}</td>
+        <td class="px-3 py-1.5"><span class="px-1.5 py-0.5 rounded text-xs ${u.ROLE === 'ADMIN' ? 'bg-red-900 text-red-300' : 'bg-slate-700'}">${u.ROLE || 'USER'}</span></td>
+        <td class="px-3 py-1.5">${u.IS_ACTIVE ? '<span class="text-emerald-400">✓</span>' : '<span class="text-red-400">✗</span>'}</td>
+        <td class="px-3 py-1.5 text-xs text-slate-400">${u.WINDOWS_ACCESS || '-'}</td>
+        <td class="px-3 py-1.5 text-xs text-slate-400">${u.INSERT_ACCESS || '-'}</td>
+        <td class="px-3 py-1.5 text-xs text-slate-400">${u.UPDATE_ACCESS || '-'}</td>
+        <td class="px-3 py-1.5 text-xs text-slate-400">${u.DELETE_ACCESS || '-'}</td>
+        <td class="px-3 py-1.5 text-right">
+          <button onclick="editUser(${u.ID})" class="px-2 py-0.5 text-xs bg-emerald-700 hover:bg-emerald-600 rounded mr-1">✎</button>
+          <button onclick="deleteUser(${u.ID})" class="px-2 py-0.5 text-xs bg-red-700 hover:bg-red-600 rounded">×</button>
+        </td>
+      </tr>
+    `;
+  });
+
+  html += `
+        </tbody>
+      </table>
+      <div class="mt-4 text-xs text-slate-500">
+        Доступы указываются через запятую (например: 1,2). WINDOWS_ACCESS — видимые окна, остальные — права на операции.
+      </div>
+    </div>
+  `;
+
+  container.innerHTML = html;
+}
+
+async function addUser() {
+  await showUserEditModal(null);
+}
+
+async function editUser(id) {
+  const users = await window.electronAPI.getUsers();
+  const user = users.find(u => u.ID == id);
+  if (user) await showUserEditModal(user);
+}
+
+async function showUserEditModal(user) {
+  const isNew = !user;
+  const wins = (fullConfig && fullConfig.windows) ? fullConfig.windows : [];
+
+  const modal = document.createElement('div');
+  modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-[999] p-4';
+
+  let accessHtml = '';
+  if (wins.length > 0) {
+    accessHtml = `<div class="mt-3"><label class="text-xs text-slate-400">Быстрый выбор доступов (окна)</label><div class="grid grid-cols-2 gap-1 text-xs mt-1">`;
+    wins.forEach(w => {
+      const wid = w.id || w.windowId || w.title;
+      accessHtml += `
+        <label class="flex items-center gap-1">
+          <input type="checkbox" class="win-access" data-wid="${wid}" ${user && (user.WINDOWS_ACCESS||'').split(',').map(s=>s.trim()).includes(String(wid)) ? 'checked' : ''}>
+          <span>${w.title} (id:${wid})</span>
+        </label>`;
+    });
+    accessHtml += `</div><div class="text-[10px] text-slate-500 mt-1">Отмеченные будут добавлены в WINDOWS_ACCESS. Для INSERT/UPDATE/DELETE используйте текстовые поля ниже.</div></div>`;
+  }
+
+  modal.innerHTML = `
+    <div class="bg-slate-800 border border-slate-600 rounded-2xl w-full max-w-lg p-5 shadow-2xl">
+      <div class="font-semibold text-lg mb-4">${isNew ? 'Добавить пользователя' : 'Редактировать пользователя #' + user.ID}</div>
+      
+      <div class="space-y-3">
+        <div>
+          <label class="block text-xs text-slate-400">Логин</label>
+          <input id="user-login" value="${user ? user.LOGIN : ''}" class="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm">
+        </div>
+        <div>
+          <label class="block text-xs text-slate-400">Пароль ${isNew ? '' : '(оставьте пустым, чтобы не менять)'}</label>
+          <input id="user-pass" type="password" value="" class="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm">
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs text-slate-400">ROLE</label>
+            <select id="user-role" class="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm">
+              <option value="ADMIN" ${user && user.ROLE==='ADMIN' ? 'selected' : ''}>ADMIN</option>
+              <option value="USER" ${user && user.ROLE==='USER' ? 'selected' : ''}>USER</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs text-slate-400">IS_ACTIVE</label>
+            <div class="pt-1">
+              <label><input type="checkbox" id="user-active" ${!user || user.IS_ACTIVE ? 'checked' : ''}> Активен</label>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs text-slate-400">WINDOWS_ACCESS (через запятую)</label>
+          <input id="user-windows" value="${user ? user.WINDOWS_ACCESS || '' : ''}" class="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm font-mono">
+        </div>
+        <div class="grid grid-cols-3 gap-2">
+          <div>
+            <label class="block text-xs text-slate-400">INSERT_ACCESS</label>
+            <input id="user-insert" value="${user ? user.INSERT_ACCESS || '' : ''}" class="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm font-mono">
+          </div>
+          <div>
+            <label class="block text-xs text-slate-400">UPDATE_ACCESS</label>
+            <input id="user-update" value="${user ? user.UPDATE_ACCESS || '' : ''}" class="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm font-mono">
+          </div>
+          <div>
+            <label class="block text-xs text-slate-400">DELETE_ACCESS</label>
+            <input id="user-delete" value="${user ? user.DELETE_ACCESS || '' : ''}" class="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm font-mono">
+          </div>
+        </div>
+
+        ${accessHtml}
+      </div>
+
+      <div class="mt-5 flex gap-2">
+        <button id="user-save" class="flex-1 bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded-xl text-sm font-semibold">Сохранить</button>
+        <button id="user-cancel" class="flex-1 bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded-xl text-sm">Отмена</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+
+  // Auto-fill access fields from checkboxes
+  modal.querySelectorAll('.win-access').forEach(chk => {
+    chk.onchange = () => {
+      const selected = Array.from(modal.querySelectorAll('.win-access:checked')).map(c => c.dataset.wid);
+      const winField = modal.querySelector('#user-windows');
+      if (winField) winField.value = selected.join(',');
+    };
+  });
+
+  modal.querySelector('#user-cancel').onclick = () => modal.remove();
+  modal.querySelector('#user-save').onclick = async () => {
+    const data = {
+      LOGIN: modal.querySelector('#user-login').value.trim(),
+      PASSWORD: modal.querySelector('#user-pass').value,
+      ROLE: modal.querySelector('#user-role').value,
+      IS_ACTIVE: modal.querySelector('#user-active').checked ? 1 : 0,
+      WINDOWS_ACCESS: modal.querySelector('#user-windows').value.trim(),
+      INSERT_ACCESS: modal.querySelector('#user-insert').value.trim(),
+      UPDATE_ACCESS: modal.querySelector('#user-update').value.trim(),
+      DELETE_ACCESS: modal.querySelector('#user-delete').value.trim()
+    };
+    if (user) data.ID = user.ID;
+
+    if (!data.LOGIN) {
+      showToast('Логин обязателен', 'error');
+      return;
+    }
+    if (isNew && !data.PASSWORD) {
+      showToast('Пароль обязателен для нового пользователя', 'error');
+      return;
+    }
+
+    const res = await window.electronAPI.saveUser(data);
+    if (res && res.success) {
+      modal.remove();
+      showUsersManagement();
+    } else {
+      showToast('Ошибка сохранения: ' + (res ? res.error : 'unknown'), 'error');
+    }
+  };
+}
+
+async function deleteUser(id) {
+  const ok = await customConfirm('Удалить пользователя?');
+  if (!ok) return;
+  const res = await window.electronAPI.deleteUser(id);
+  if (res && res.success) {
+    showUsersManagement();
+  } else {
+    showToast('Ошибка удаления: ' + (res ? res.error : ''), 'error');
+  }
 }
 
 
@@ -1869,17 +3096,27 @@ function selectAdminWindow(idOrTitle) {
   const chosen = wins.find(w => (w.id || w.title) == idOrTitle || w.title == idOrTitle);
   if (!chosen) return;
   currentWindowConfig = normalizeWindowConfig(chosen);
+  if (!Array.isArray(currentWindowConfig.rowFormatting)) currentWindowConfig.rowFormatting = [];
   if (!currentWindowConfig.insert) currentWindowConfig.insert = { table: '', fields: [] };
   if (!currentWindowConfig.update) currentWindowConfig.update = { table: '', keyField: '', fields: [] };
   if (!currentWindowConfig.delete) currentWindowConfig.delete = { table: '', keyField: '' };
   if (!currentWindowConfig.grid) currentWindowConfig.grid = [];
   if (!currentWindowConfig.details) currentWindowConfig.details = [];
   if (!currentWindowConfig.filters) currentWindowConfig.filters = [];
+
+  // Dynamic title in top bar for admin editing context
+  const topTitle = document.getElementById('window-title');
+  if (topTitle) topTitle.textContent = 'Настройка: ' + (chosen.title || '');
+
   renderAdminConfigUI();
 }
 
 if (typeof window !== 'undefined') {
   window.selectAdminWindow = selectAdminWindow;
+  window.showUsersManagement = showUsersManagement;
+  window.addUser = addUser;
+  window.editUser = editUser;
+  window.deleteUser = deleteUser;
 }
 
 function renderAdminConfigUI() {
@@ -1892,6 +3129,7 @@ function renderAdminConfigUI() {
     if (!currentWindowConfig.grid) currentWindowConfig.grid = [];
     if (!currentWindowConfig.details) currentWindowConfig.details = [];
     if (!currentWindowConfig.filters) currentWindowConfig.filters = [];
+    if (!currentWindowConfig.formCustomButtons) currentWindowConfig.formCustomButtons = [];
 
     // Ensure insert/update use the main table (table input removed from insert/update sections; table is set at window level in admin)
     const mainTable = currentWindowConfig.dataSource?.table || currentWindowConfig.table || '';
@@ -1926,6 +3164,8 @@ function renderAdminConfigUI() {
     // Always rebuild lists from master (only master is truth)
     rebuildFormListsFromMaster();
 
+    if (!Array.isArray(currentWindowConfig.rowFormatting)) currentWindowConfig.rowFormatting = [];
+
     var wins = (fullConfig && fullConfig.windows) ? fullConfig.windows : [];
     var curr = currentWindowConfig.id || currentWindowConfig.title || '';
     var selectHtml = wins.map(function(w) {
@@ -1940,7 +3180,7 @@ function renderAdminConfigUI() {
         '<h2 class="text-2xl font-bold text-white">Настройка: <span class="text-amber-400">' + currentWindowConfig.title + '</span></h2></div>' +
         '<div class="flex gap-2">' +
         '<button onclick="addNewWindow()" class="bg-blue-600 hover:bg-blue-500 px-3 py-1.5 rounded-xl text-sm">+ Новое окно</button>' +
-        '<button onclick="saveInsertUpdateConfig()" class="bg-emerald-600 hover:bg-emerald-500 px-4 py-1.5 rounded-xl text-sm font-semibold flex items-center gap-1"><i class="fas fa-save"></i> Сохранить</button>' +
+        '<button onclick="saveInsertUpdateConfig()" class="bg-emerald-700 hover:bg-emerald-600 px-4 py-1.5 rounded-xl text-sm font-semibold flex items-center gap-1"><i class="fas fa-save"></i> Сохранить</button>' +
         '<button onclick="reloadCurrentWindow()" class="bg-slate-600 hover:bg-slate-500 px-3 py-1.5 rounded-xl text-sm">Перезагрузить данные</button>' +
         '<button onclick="showAdminGuide()" class="bg-slate-700 hover:bg-slate-600 px-3 py-1.5 rounded-xl text-sm flex items-center gap-1" title="Справка и User Guide по всем возможностям настройки"><i class="fas fa-question-circle"></i> ?</button>' +
         '</div></div>' +
@@ -1975,7 +3215,7 @@ function renderAdminConfigUI() {
         '</div>' +
 
         '<div class="mt-4 bg-slate-800 border border-slate-700 rounded-2xl p-4">' +
-        '<div class="flex justify-between mb-2"><h3 class="text-sky-400 font-semibold">GRID (главная таблица)</h3><div class="text-xs"><button onclick="autoFillGridFromQuery()" class="bg-sky-700 px-2 py-0.5 rounded">Авто</button><button onclick="addGridColumn()" class="bg-sky-600 px-2 py-0.5 rounded ml-1">+ Колонка</button></div></div>' +
+        '<div class="flex justify-between mb-2"><h3 class="text-blue-400 font-semibold">GRID (главная таблица)</h3><div class="text-xs"><button onclick="autoFillGridFromQuery()" class="bg-blue-700 px-2 py-0.5 rounded">Авто</button><button onclick="addGridColumn()" class="bg-blue-600 px-2 py-0.5 rounded ml-1">+ Колонка</button></div></div>' +
         '<div id="grid-columns-list" class="space-y-1 max-h-[160px] overflow-auto custom-scroll"></div>' +
         '</div>' +
 
@@ -1987,6 +3227,18 @@ function renderAdminConfigUI() {
         '<div class="mt-4 bg-slate-800 border border-slate-700 rounded-2xl p-4">' +
         '<div class="flex justify-between mb-2"><h3 class="text-violet-400 font-semibold">ФИЛЬТРЫ (оператор выбирается в окне)</h3><button onclick="addFilter()" class="bg-violet-600 px-2 py-0.5 rounded text-xs">+ Фильтр</button></div>' +
         '<div id="filters-list" class="space-y-1 max-h-[120px] overflow-auto custom-scroll"></div>' +
+        '</div>' +
+
+        '<div class="mt-4 bg-slate-800 border border-slate-700 rounded-2xl p-4">' +
+        '<div class="flex justify-between mb-2"><h3 class="text-orange-400 font-semibold">КНОПКИ В ФОРМЕ (вверху формы)</h3><button onclick="addFormButton()" class="bg-orange-600 px-2 py-0.5 rounded text-xs">+ Добавить кнопку</button></div>' +
+        '<div id="form-buttons-list" class="space-y-1 max-h-[160px] overflow-auto custom-scroll text-xs"></div>' +
+        '<div class="text-[9px] text-slate-500 mt-1">Кнопки сверху формы. Указывай режимы (Insert/Update). Для importExcel маппинг из админки применяется автоматически (без окон и предупреждений).</div>' +
+        '</div>' +
+
+        '<div class="mt-4 bg-slate-800 border border-slate-700 rounded-2xl p-4">' +
+        '<div class="flex justify-between mb-2"><h3 class="text-red-400 font-semibold">ФОРМАТИРОВАНИЕ СТРОК (условные стили в таблице)</h3><button onclick="addRowFormattingRule()" class="bg-red-600 px-2 py-0.5 rounded text-xs">+ Правило</button></div>' +
+        '<div id="row-formatting-list" class="space-y-1 max-h-[140px] overflow-auto custom-scroll text-xs"></div>' +
+        '<div class="text-[9px] text-slate-500 mt-1">Например: closeDate notEmpty → красный бордер. Выбирай цвета через палитру (как для кнопок). Много правил на окно.</div>' +
         '</div>' +
 
         '<div class="mt-4 bg-slate-800 border border-slate-700 rounded-2xl p-4">' +
@@ -2012,26 +3264,29 @@ function renderAdminConfigUI() {
         document.body.appendChild(floatBtn);
     }, 50);
 
-    setTimeout(function() {
-        var sel = document.getElementById('admin-window-select');
-        if (sel) {
-            sel.onchange = function() {
-                var v = sel.value;
-                var c = (fullConfig && fullConfig.windows || []).find(function(w){ return (w.id || w.title) == v; });
-                if (c) {
-                    currentWindowConfig = normalizeWindowConfig(c);
-                    renderAdminConfigUI();
-                }
-            };
-        }
-        if (typeof renderUnifiedFieldsList === 'function') renderUnifiedFieldsList();
-        if (typeof renderGridList === 'function') renderGridList();
-        if (typeof renderDetailsList === 'function') renderDetailsList();
-        if (typeof renderFiltersList === 'function') renderFiltersList();
+    // Attach immediately where possible
+    var sel = document.getElementById('admin-window-select');
+    if (sel) {
+        sel.onchange = function() {
+            var v = sel.value;
+            var c = (fullConfig && fullConfig.windows || []).find(function(w){ return (w.id || w.title) == v; });
+            if (c) {
+                currentWindowConfig = normalizeWindowConfig(c);
+                if (!Array.isArray(currentWindowConfig.rowFormatting)) currentWindowConfig.rowFormatting = [];
+                renderAdminConfigUI();
+            }
+        };
+    }
 
-        // Render unified fields view
-        if (typeof renderUnifiedFieldsList === 'function') renderUnifiedFieldsList();
-    }, 40);
+    if (typeof renderUnifiedFieldsList === 'function') renderUnifiedFieldsList();
+    if (typeof renderGridList === 'function') renderGridList();
+    if (typeof renderDetailsList === 'function') renderDetailsList();
+    if (typeof renderFiltersList === 'function') renderFiltersList();
+    if (typeof renderFormButtonsList === 'function') renderFormButtonsList();
+    if (typeof renderRowFormattingList === 'function') renderRowFormattingList();
+
+    // Render unified fields view (duplicate call was here, keep for safety)
+    if (typeof renderUnifiedFieldsList === 'function') renderUnifiedFieldsList();
 }
 
 function renderUnifiedFieldsList() {
@@ -2057,7 +3312,7 @@ function renderUnifiedFieldsList() {
 
     return `
       <div class="flex items-center gap-2 bg-slate-800 px-2 py-1 rounded text-xs">
-        <span class="flex-1 font-mono">${name}</span>
+        <span class="flex-1 font-mono">${name}${f.readonly ? ' [ro]' : ''}${f.disabled ? ' [dis]' : ''}</span>
         <span class="text-[10px] text-slate-300">${f.title || ''}</span>
         
         <label class="flex items-center gap-1 cursor-pointer">
@@ -2207,7 +3462,7 @@ if (typeof window !== 'undefined') {
 
 function syncInsertUpdateFields(direction = 'both') {
   if (!currentWindowConfig.insert || !currentWindowConfig.update) {
-    alert('INSERT или UPDATE не настроены');
+    showToast('INSERT или UPDATE не настроены', 'error');
     return;
   }
 
@@ -2256,7 +3511,7 @@ function syncInsertUpdateFields(direction = 'both') {
     });
   }
 
-  alert('Поля синхронизированы. Общие свойства (title, type, validations, transforms, auto и т.д.) теперь одинаковые.');
+  showToast('Поля синхронизированы. Общие свойства (title, type, validations, transforms, auto и т.д.) теперь одинаковые.');
   renderAdminConfigUI();
 }
 
@@ -2291,7 +3546,7 @@ function showAdminGuide() {
     {
       category: "Поля INSERT / UPDATE",
       title: "1. Основные свойства поля",
-      desc: "• Title — красивое название, которое видит пользователь.\\n• Type — тип поля: text, textarea, number, date, checkbox (при отмеченном можно 'date' → текущая дата, при снятом — пусто), select, lookup.\\n• Default value — значение по умолчанию при создании.\\n• Required — обязательно для заполнения.\\n• Readonly в update — поле только для чтения при редактировании.\\n• Hidden — поле не показывается в форме, но значение может подставляться автоматически.",
+      desc: "• Title — красивое название, которое видит пользователь.\\n• Type — тип поля: text, textarea, number, date, checkbox (при отмеченном можно 'date' → текущая дата, при снятом — пусто), select, lookup.\\n• Default value — значение по умолчанию при создании.\\n• Required — обязательно для заполнения.\\n• Disabled (в форме) — пользователь не может менять значение (например после автоподстановки комиссии).\\n• Hidden — поле не показывается в форме, но значение может подставляться автоматически.",
       example: "Title: 'Номер карты', Type: 'text', Required: true",
       keywords: "title type required readonly hidden default"
     },
@@ -2305,14 +3560,14 @@ function showAdminGuide() {
     {
       category: "Поля INSERT / UPDATE",
       title: "3. Связанные / Зависимые колонки + cascading lookup",
-      desc: "Это тот блок «Источник данных + Зависимости» в редакторе поля.\nСвязь: Тип поля = lookup/select → иди в этот блок.\n• Простой lookup: dependsOn пустой + SQL запрос\n• Cascading: dependsOn = другое поле + SQL с ?\n• Тип источника: SQL запрос / Другое окно / Условный\n\nПри dependsOn поле перезагружает список когда меняется родитель.",
-      example: "Простой MCC: Тип поля=lookup + в источнике SQL: SELECT DISTINCT mcc as value... (без dependsOn)\nCascading Город: dependsOn=Страна + SELECT ... WHERE country = ?",
+      desc: "Это тот блок «Источник данных + Зависимости» в редакторе поля.\nСвязь: Тип поля = lookup/select → иди в этот блок.\n• Простой lookup: dependsOn пустой + SQL запрос\n• Cascading: dependsOn = другое поле + SQL с ?\n• Условный (conditional): зависит от поля + один SQL с CASE WHEN ? = 'значение' (или несколько ? ) / UNION для разных таблиц. Или используй lookupConditions для полностью разных запросов.\n\nПри dependsOn поле перезагружает список когда меняется родитель.",
+      example: "Region: простой SELECT RegionName FROM REGIONS\nDistrict: dependsOn=City + основной SQL + условие: если City='Երևан' то SELECT DistrictName FROM DISTRICTS",
       keywords: "dependsOn lookup cascading страна город связанная колонка источник данных"
     },
     {
       category: "Поля INSERT / UPDATE",
       title: "4. Валидации (правила проверки)",
-      desc: "Через 'Добавить мощную возможность' → Валидация.\n\nТипы валидаций:\n• required — обязательно\n• length — длина (min, max, exact)\n• minmax — минимум/максимум значения\n• position — проверка конкретной позиции в строке (start, value)\n• language — только определённые символы (armenian, cyrillic, digits...)\n• pattern — регулярное выражение\n• unique — проверка уникальности через SQL запрос\n• custom — SQL запрос ИЛИ условие if (напр. value > 1). Для custom можно указать условие JS-like и/или SQL с ?",
+      desc: "Через 'Добавить мощную возможность' → Валидация.\n\nТипы валидаций:\n• required — обязательно\n• length — длина (min, max, exact)\n• minmax — минимум/максимум значения\n• position — проверка конкретной позиции в строке (start, value)\n• language — только определённые символы (armenian, cyrillic, digits...)\n• pattern — регулярное выражение\n• unique — проверка уникальности через SQL запрос (можно composite: укажите поля через запятую в редакторе, напр. TerminalID,MerchantID и запрос SELECT 1 FROM t WHERE tid=? AND mid=?)\n• custom — SQL запрос ИЛИ условие if (напр. value > 1). Для custom можно указать условие JS-like и/или SQL с ?",
       example: "position: start=1, value=ARM → первые 3 символа должны быть 'ARM'",
       keywords: "валидация validation length position pattern unique required"
     },
@@ -2355,7 +3610,7 @@ function showAdminGuide() {
       category: "Валидации",
       title: "Правила проверки значения",
       desc: "Можно добавить много типов валидаций на поле (required, length, pattern, position, language, unique, cross-field и др.).",
-      example: "length min:3 max:50 • position 1-3 должно быть 'ARM' • unique по SQL запросу",
+      example: "length min:3 max:50 • position 1-3 должно быть 'ARM' • unique по SQL (в т.ч. связка TerminalID+MerchantID)",
       keywords: "валидация validation required length pattern position language unique"
     },
     {
@@ -2371,6 +3626,20 @@ function showAdminGuide() {
       desc: "• type: \"select\" (выпадающий) → классический <select>. Обязательно выбрать из списка. Хорошо для маленьких списков (5-100 элементов).\n• type: \"lookup\" (динамический) → текстовое поле с автоподсказками (input + datalist). Можно печатать, браузер сам фильтрует по префиксу (набираешь \"41\" — сразу показывает 410000 и т.д.). Идеально для MCC, больших справочников, артикулов. Можно вводить вручную + подсказки.\n\nОба типа поддерживают lookupQuery (SELECT ... as value, ... as display). lookup + dependsOn = cascading (Страна → Город).",
       example: "MCC: type=lookup + SELECT DISTINCT mcc as value, mcc as display FROM ...",
       keywords: "lookup select динамический datalist фильтр префикс MCC большой список"
+    },
+    {
+      category: "Lookup / Auto заполнение",
+      title: "Какой функционал выбрать для АВТОПОДСТАНОВКИ (чтобы не открылся выпадающий список при 1 возможности)",
+      desc: "• Для автоподстановки **одного** значения (например следующий ID: SELECT MAX(TerminalID)+1 FROM ...) — используй **System / Auto variable** (фиолетовый блок в редакторе поля) → тип **SQL**.\n  Тип поля ставь обычный text/number. НЕ используй type=lookup и НЕ клади запрос в lookupQuery.\n• lookup / select + lookupQuery — это когда нужен **СПИСОК** для выбора (даже если сейчас 1 запись).\n\nТеперь в коде добавлено: если lookup вернул ровно 1 строку — значение автоматически подставится, datalist будет очищен, list= убран → выпадающий список НЕ откроется.",
+      example: "TerminalID: type=text + Auto=SQL с \"SELECT MAX(TerminalID)+1 FROM MERCHANTS\"\nMCC: type=select + searchable + lookupQuery (список — нормально показать варианты)",
+      keywords: "автопостовление автоподстановка 1 возможность выпадающий список не открывать lookup auto sql max"
+    },
+    {
+      category: "Выпадающие списки (3 чётких режима)",
+      title: "Авто (1 значение без списка) / Список из базы с поиском+скроллом / Ручной список без БД",
+      desc: "1. Чистое автозаполнение (один вариант автоматически) — System/Auto (SQL или CONSTANT). Списка нет вообще.\n2. Выпадающий список С ПОИСКОМ и ПРОКРУТКОЙ из базы — type=lookup + Источник: SQL запрос (или cascading).\n3. Выпадающий список С ПОИСКОМ без обращения к базе — type=lookup + Источник: «Ручной список» и напиши варианты построчно (можно value|текст).\n\nПоиск работает при наборе, список прокручивается, выглядит красиво.",
+      example: "Ручной: \"Активный\nЗакрыт\nВ архиве\"\nС поиском: MCC lookupQuery + type=lookup",
+      keywords: "ручной список статический варианты без базы поиск скролл выпадающий lookup"
     },
     {
       category: "Основные свойства поля",
@@ -2553,10 +3822,10 @@ function renderGridList() {
         div.innerHTML = 
             '<div>' +
             '<span class="font-medium">' + (col.title || col.field) + '</span>' +
-            '<span class="text-xs text-sky-400 ml-2">(' + col.field + ')</span>' +
+            '<span class="text-xs text-blue-400 ml-2">(' + col.field + ')</span>' +
             '</div>' +
             '<div class="flex gap-1">' +
-            '<button class="px-2 py-0.5 text-xs bg-sky-700 rounded" onclick="editGridColumn(' + i + ')">✎ Название</button>' +
+            '<button class="px-2 py-0.5 text-xs bg-blue-700 rounded" onclick="editGridColumn(' + i + ')">✎ Название</button>' +
             '<button class="px-2 py-0.5 text-xs bg-red-700 rounded" onclick="deleteGridColumn(' + i + ')">×</button>' +
             '</div>';
         container.appendChild(div);
@@ -2593,7 +3862,7 @@ async function deleteGridColumn(index) {
 
 async function autoFillGridFromQuery() {
     const q = currentWindowConfig.query || (currentWindowConfig.dataSource && currentWindowConfig.dataSource.query);
-    if (!q) return alert('В конфиге окна нет основного SQL запроса');
+    if (!q) { showToast('В конфиге окна нет основного SQL запроса', 'error'); return; }
     try {
         const testSql = q + (/limit\s+\d+/i.test(q) ? '' : ' LIMIT 1');
         const res = await window.electronAPI.executeQuery(testSql);
@@ -2601,12 +3870,12 @@ async function autoFillGridFromQuery() {
             const cols = Object.keys(res.rows[0]).map(f => ({ field: f, title: f })).slice(0, 10);
             currentWindowConfig.grid = cols;
             renderGridList();
-            alert('Grid колонки обновлены автоматически (первые 10) из запроса');
+            showToast('Grid колонки обновлены автоматически (первые 10) из запроса');
         } else {
-            alert('Не удалось получить колонки');
+            showToast('Не удалось получить колонки', 'error');
         }
     } catch (e) {
-        alert('Ошибка авто-заполнения grid: ' + e.message);
+        showToast('Ошибка авто-заполнения grid: ' + e.message, 'error');
     }
 }
 
@@ -2662,7 +3931,7 @@ async function deleteDetailColumn(index) {
 
 async function autoFillDetailsFromQuery() {
     const q = currentWindowConfig.query || (currentWindowConfig.dataSource && currentWindowConfig.dataSource.query);
-    if (!q) return alert('В конфиге окна нет основного SQL запроса');
+    if (!q) { showToast('В конфиге окна нет основного SQL запроса', 'error'); return; }
     try {
         const testSql = q + (/limit\s+\d+/i.test(q) ? '' : ' LIMIT 1');
         const res = await window.electronAPI.executeQuery(testSql);
@@ -2670,12 +3939,12 @@ async function autoFillDetailsFromQuery() {
             const cols = Object.keys(res.rows[0]).map(f => ({ field: f, title: f }));
             currentWindowConfig.details = cols;  // все колонки или можно .slice если надо
             renderDetailsList();
-            alert('DETAILS обновлены из запроса');
+            showToast('DETAILS обновлены из запроса');
         } else {
-            alert('Не удалось получить колонки');
+            showToast('Не удалось получить колонки', 'error');
         }
     } catch (e) {
-        alert('Ошибка авто-заполнения details: ' + e.message);
+        showToast('Ошибка авто-заполнения details: ' + e.message, 'error');
     }
 }
 
@@ -2706,6 +3975,7 @@ async function addFilter() {
     if (!field) return;
     const title = await customPrompt('Название фильтра:', field);
     if (!currentWindowConfig.filters) currentWindowConfig.filters = [];
+    if (!currentWindowConfig.formCustomButtons) currentWindowConfig.formCustomButtons = [];
     currentWindowConfig.filters.push({
         field: field.trim(),
         title: (title || field).trim()
@@ -2729,6 +3999,725 @@ async function deleteFilter(index) {
         currentWindowConfig.filters.splice(index, 1);
         renderFiltersList();
     }
+}
+
+function renderFormButtonsList() {
+  const container = document.getElementById('form-buttons-list');
+  if (!container) return;
+  const buttons = currentWindowConfig.formCustomButtons || [];
+  container.innerHTML = '';
+  if (buttons.length === 0) {
+    container.innerHTML = '<div class="text-slate-500 text-xs p-1">Нет кнопок. Нажми + чтобы добавить (появятся вверху формы).</div>';
+    return;
+  }
+  buttons.forEach((btn, i) => {
+    const div = document.createElement('div');
+    div.className = 'bg-slate-900 border border-slate-700 p-2 rounded flex justify-between items-start text-xs';
+    const styleInfo = btn.style ? `style: ${JSON.stringify(btn.style)}` : '';
+    const stylePreview = btn.style ? `bg:${btn.style.bg||''} color:${btn.style.color||''}` : '';
+    const posText = btn.position === 'bottom' ? 'внизу' : 'вверху';
+    const modesText = (btn.modes && btn.modes.length) ? btn.modes.join('+') : 'insert+update';
+    div.innerHTML = `
+      <div class="flex-1">
+        <div><span class="font-semibold">${btn.label}</span> <span class="text-orange-400">(${btn.action})</span> <span class="text-[9px] text-slate-500">[${posText}] [${modesText}]</span></div>
+        <div class="text-[9px] text-slate-400 mt-0.5">${btn.set ? 'set: ' + (Array.isArray(btn.set) ? btn.set.map(s => s.field + '=' + (s.valueType||'val')).join(', ') : JSON.stringify(btn.set)).slice(0,70) : ''}${btn.saveAfter ? ' [auto-save]' : ''} ${btn.defaultCellMapping ? 'cells: ' + JSON.stringify(btn.defaultCellMapping).slice(0,40) : ''} ${stylePreview}</div>
+      </div>
+      <div class="flex gap-1 text-[10px]">
+        <button class="px-1.5 bg-emerald-700 rounded" onclick="editFormButton(${i})">✎</button>
+        <button class="px-1.5 bg-red-700 rounded" onclick="deleteFormButton(${i})">×</button>
+      </div>
+    `;
+    container.appendChild(div);
+  });
+}
+
+async function addFormButton() {
+  showButtonEditor(null, (newBtn) => {
+    if (!currentWindowConfig.formCustomButtons) currentWindowConfig.formCustomButtons = [];
+    currentWindowConfig.formCustomButtons.push(newBtn);
+    renderFormButtonsList();
+  });
+}
+
+async function editFormButton(index) {
+  const btn = currentWindowConfig.formCustomButtons[index];
+  showButtonEditor(btn, (updatedBtn) => {
+    currentWindowConfig.formCustomButtons[index] = updatedBtn;
+    renderFormButtonsList();
+  });
+}
+
+function showButtonEditor(existingBtn, onSave) {
+  const isNew = !existingBtn;
+  const btn = existingBtn ? {...existingBtn} : {
+    label: 'Новая кнопка',
+    action: 'importExcel',
+    style: { bg: '#0ea5e9', color: '#fff', width: 'auto', height: 'auto' },
+    defaultCellMapping: {},
+    set: [],
+    modes: ['insert', 'update']
+  };
+
+  const modal = document.createElement('div');
+  modal.className = 'fixed inset-0 bg-black/90 flex items-center justify-center z-[999] p-4';
+  modal.innerHTML = `
+    <div class="bg-slate-800 border border-slate-600 rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-auto shadow-2xl">
+      <div class="px-5 py-4 border-b border-slate-700 flex items-center justify-between bg-slate-900">
+        <span class="font-semibold text-lg">${isNew ? 'Добавить кнопку' : 'Редактировать кнопку'}</span>
+        <button id="close-btn" class="text-2xl leading-none px-2 text-slate-400 hover:text-white">×</button>
+      </div>
+      <div class="p-5 space-y-4">
+        <!-- Основные -->
+        <div>
+          <label class="block text-xs text-slate-400 mb-1">Текст кнопки</label>
+          <input id="btn-label" value="${btn.label || ''}" class="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm">
+        </div>
+
+        <div>
+          <label class="block text-xs text-slate-400 mb-1">Действие (функционал)</label>
+          <select id="btn-action" class="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm">
+            <option value="importExcel">Загрузить из Excel (заполнить форму из ячеек)</option>
+            <option value="exportExcel">Выгрузить в Excel</option>
+            <option value="setFields">Установить значения полей (change in DB)</option>
+          </select>
+        </div>
+
+        <div>
+          <label class="block text-xs text-slate-400 mb-1">Где отображать</label>
+          <select id="btn-position" class="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm">
+            <option value="top">Вверху формы (перед полями)</option>
+            <option value="bottom">Внизу формы (после полей)</option>
+          </select>
+        </div>
+
+        <!-- Доступность по типам форм (insert / update / delete) -->
+        <div class="border border-slate-700 rounded-xl p-3 bg-slate-950/60">
+          <div class="text-xs font-semibold text-slate-300 mb-1.5">Кнопка доступна в формах:</div>
+          <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs">
+            <label class="flex items-center gap-1.5 cursor-pointer">
+              <input type="checkbox" id="btn-mode-insert" checked class="accent-emerald-500">
+              <span>Insert (добавление новой записи)</span>
+            </label>
+            <label class="flex items-center gap-1.5 cursor-pointer">
+              <input type="checkbox" id="btn-mode-update" checked class="accent-emerald-500">
+              <span>Update (редактирование записи)</span>
+            </label>
+            <label class="flex items-center gap-1.5 cursor-pointer">
+              <input type="checkbox" id="btn-mode-delete" class="accent-emerald-500">
+              <span>Delete</span>
+            </label>
+          </div>
+          <div class="text-[9px] text-slate-500 mt-1">Пример: если выбрать только Update — кнопка появится только при редактировании, а не при создании новой.</div>
+        </div>
+
+        <!-- Стиль -->
+        <div class="border border-slate-700 rounded-xl p-3 bg-slate-950/60">
+          <div class="text-xs font-semibold text-slate-300 mb-2">Стиль кнопки</div>
+          <div class="grid grid-cols-2 gap-3 text-xs">
+            <div>
+              <label class="block text-slate-400 mb-0.5">Цвет фона</label>
+              <input id="btn-bg" type="color" value="${btn.style?.bg || '#0ea5e9'}" class="w-full h-9 bg-slate-900 border border-slate-600 rounded cursor-pointer">
+            </div>
+            <div>
+              <label class="block text-slate-400 mb-0.5">Цвет текста</label>
+              <input id="btn-color" type="color" value="${btn.style?.color || '#ffffff'}" class="w-full h-9 bg-slate-900 border border-slate-600 rounded cursor-pointer">
+            </div>
+            <div>
+              <label class="block text-slate-400 mb-0.5">Ширина</label>
+              <input id="btn-width" value="${btn.style?.width || 'auto'}" placeholder="auto или 160px" class="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1.5 text-sm">
+            </div>
+            <div>
+              <label class="block text-slate-400 mb-0.5">Высота</label>
+              <input id="btn-height" value="${btn.style?.height || 'auto'}" placeholder="auto или 34px" class="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1.5 text-sm">
+            </div>
+          </div>
+        </div>
+
+        <!-- Динамическая конфигурация по action -->
+        <div id="btn-config-area" class="border border-slate-700 rounded-xl p-3 bg-slate-950/60 min-h-[120px]">
+          <!-- JS заполнит в зависимости от action -->
+        </div>
+      </div>
+      <div class="px-5 py-4 border-t border-slate-700 bg-slate-900 flex justify-end gap-2 rounded-b-2xl">
+        <button id="cancel-btn" class="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-xl text-sm">Отмена</button>
+        <button id="save-btn" class="px-5 py-2 bg-emerald-700 hover:bg-emerald-600 rounded-xl text-sm font-semibold">Сохранить кнопку</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+
+  const actionSel = modal.querySelector('#btn-action');
+  const configArea = modal.querySelector('#btn-config-area');
+  const posSel = modal.querySelector('#btn-position');
+
+  const modeInsert = modal.querySelector('#btn-mode-insert');
+  const modeUpdate = modal.querySelector('#btn-mode-update');
+  const modeDelete = modal.querySelector('#btn-mode-delete');
+
+  // Set initial values
+  actionSel.value = btn.action || 'importExcel';
+  posSel.value = btn.position || 'top';
+
+  // Init modes checkboxes (default to insert+update if not specified)
+  const initialModes = Array.isArray(btn.modes) && btn.modes.length > 0 ? btn.modes : ['insert', 'update'];
+  if (modeInsert) modeInsert.checked = initialModes.includes('insert');
+  if (modeUpdate) modeUpdate.checked = initialModes.includes('update');
+  if (modeDelete) modeDelete.checked = initialModes.includes('delete');
+
+  function renderConfigArea() {
+    configArea.innerHTML = '';
+    const act = actionSel.value;
+
+    if (act === 'importExcel' || act === 'exportExcel') {
+      // Dynamic list of field -> cell/column mapping - now supports adding MANY distinct mappings reliably
+      const isCell = act === 'importExcel'; // for import use cells like A2, for export columns or cells
+
+      let html = `
+        <div class="text-xs font-semibold mb-1.5">${isCell ? 'Маппинг: Поле формы → Ячейка Excel (A2, B5 и т.д.)' : 'Маппинг: Поле формы → Колонка/ячейка в Excel'}</div>
+        <div id="mapping-rows" class="space-y-1 mb-2 max-h-[200px] overflow-auto custom-scroll p-1 border border-slate-800 rounded"></div>
+        <button id="add-map-row" class="text-xs px-2 py-1 bg-orange-600 hover:bg-orange-500 rounded">+ Добавить поле для маппинга</button>
+        <div class="text-[10px] text-slate-500 mt-1">Если здесь задать маппинг — данные применятся полностью автоматически при клике на кнопку (никаких окон и алертов). Если не задать — кнопка просто ничего не сделает.</div>
+      `;
+      configArea.innerHTML = html;
+
+      const rowsContainer = configArea.querySelector('#mapping-rows');
+      const addBtn = configArea.querySelector('#add-map-row');
+
+      // Ensure the right map object exists and is an object (not array etc)
+      if (act === 'importExcel') {
+        if (!btn.defaultCellMapping || typeof btn.defaultCellMapping !== 'object') btn.defaultCellMapping = {};
+      } else {
+        if (!btn.mapping || typeof btn.mapping !== 'object') btn.mapping = {};
+      }
+      let currentMap = (act === 'importExcel' ? btn.defaultCellMapping : btn.mapping);
+
+      function getUsedFields() {
+        return Object.keys(currentMap || {});
+      }
+
+      function getAvailForAdd() {
+        const used = new Set(getUsedFields());
+        return (currentWindowConfig.fields || []).filter(f => !f.hiddenInForm && !used.has(f.field));
+      }
+
+      function getOptionsForRow(currentField) {
+        const used = new Set(getUsedFields());
+        const all = (currentWindowConfig.fields || []).filter(f => !f.hiddenInForm);
+        const opts = [];
+        // always include the current one for this row
+        all.forEach(f => {
+          if (!used.has(f.field) || f.field === currentField) {
+            opts.push(f);
+          }
+        });
+        // also keep any legacy field not in master
+        if (currentField && !all.find(f => f.field === currentField)) {
+          opts.push({ field: currentField, title: currentField });
+        }
+        return opts;
+      }
+
+      function syncBtnMap() {
+        if (act === 'importExcel') {
+          btn.defaultCellMapping = currentMap;
+        } else {
+          btn.mapping = currentMap;
+        }
+      }
+
+      function renderRows() {
+        rowsContainer.innerHTML = '';
+        const usedNow = getUsedFields();
+
+        Object.keys(currentMap).forEach(formField => {
+          const cell = currentMap[formField] || '';
+          const row = document.createElement('div');
+          row.className = 'flex gap-2 items-center bg-slate-900 border border-slate-700 rounded p-1';
+          row.innerHTML = `
+            <select class="map-field bg-slate-800 border border-slate-600 rounded px-1 py-0.5 text-xs flex-1"></select>
+            <input class="map-cell bg-slate-800 border border-slate-600 rounded px-1 py-0.5 text-xs font-mono w-20" value="${cell}" placeholder="${isCell ? 'A2' : 'Col'}">
+            <button class="text-red-400 hover:text-red-500 px-1 text-sm" title="Удалить">×</button>
+          `;
+
+          const sel = row.querySelector('.map-field');
+          const inp = row.querySelector('.map-cell');
+          const del = row.querySelector('button');
+
+          // Populate only non-duplicate choices (current + unused)
+          const options = getOptionsForRow(formField);
+          options.forEach(f => {
+            const opt = document.createElement('option');
+            opt.value = f.field;
+            opt.textContent = f.title || f.field;
+            if (f.field === formField) opt.selected = true;
+            sel.appendChild(opt);
+          });
+
+          // Cell input updates the map under the *current* selected field key
+          inp.oninput = () => {
+            const key = sel.value || formField;
+            currentMap[key] = inp.value.trim();
+            syncBtnMap();
+          };
+
+          sel.onchange = () => {
+            const newKey = sel.value;
+            const val = inp.value.trim();
+            // remove the old key this row represented
+            if (formField && currentMap.hasOwnProperty(formField)) {
+              delete currentMap[formField];
+            }
+            // assign (if newKey was used elsewhere it will be overwritten - simple and safe)
+            currentMap[newKey] = val;
+            syncBtnMap();
+            renderRows(); // refresh selects so duplicates disappear from other rows
+          };
+
+          del.onclick = () => {
+            const key = sel.value || formField;
+            delete currentMap[key];
+            syncBtnMap();
+            renderRows();
+          };
+
+          rowsContainer.appendChild(row);
+        });
+      }
+
+      addBtn.onclick = () => {
+        const unused = getAvailForAdd();
+        if (unused.length === 0) {
+          showToast('Все доступные поля формы уже добавлены в маппинг.', 'error');
+          return;
+        }
+        const nextField = unused[0].field;
+        currentMap[nextField] = isCell ? 'A1' : nextField;  // sensible default
+        syncBtnMap();
+        renderRows();
+      };
+
+      // initial render
+      renderRows();
+
+    } else if (act === 'setFields') {
+      // Rich editor for many value source options for DB/set in form
+      let html = `
+        <div class="text-xs font-semibold mb-1.5">Установка значений (много источников: константа, NOW, из поля формы, SQL из БД и др.)</div>
+        <div id="set-rows" class="space-y-2 mb-2"></div>
+        <button id="add-set-row" class="text-xs px-2 py-1 bg-orange-600 hover:bg-orange-500 rounded">+ Добавить поле для установки</button>
+        <div class="mt-3 flex items-center gap-2 text-xs">
+          <label class="flex items-center gap-1 cursor-pointer">
+            <input type="checkbox" id="set-save-after" class="accent-emerald-500">
+            <span>Автоматически сохранить в БД после установки (один клик)</span>
+          </label>
+        </div>
+      `;
+      configArea.innerHTML = html;
+
+      const rowsC = configArea.querySelector('#set-rows');
+      const addB = configArea.querySelector('#add-set-row');
+      const saveAfterChk = configArea.querySelector('#set-save-after');
+
+      if (!Array.isArray(btn.set)) {
+        // convert legacy flat object to rich array
+        const legacy = btn.set || {};
+        btn.set = Object.keys(legacy).map(fld => {
+          const v = legacy[fld];
+          if (v && typeof v === 'object') return { field: fld, ...v };
+          const isNow = (v === 'NOW' || v === 'now');
+          return { field: fld, valueType: isNow ? 'now' : 'constant', value: isNow ? '' : v };
+        });
+      }
+      if (!btn.set) btn.set = [];
+      saveAfterChk.checked = !!btn.saveAfter;
+
+      function getAvailFields() {
+        return (currentWindowConfig.fields || []).filter(f => !f.hiddenInForm);
+      }
+
+      function createValueUI(rowEl, spec) {
+        const box = rowEl.querySelector('.set-value-ui');
+        box.innerHTML = '';
+        const t = spec.valueType || 'constant';
+
+        if (t === 'constant') {
+          const wrap = document.createElement('div');
+          wrap.className = 'flex-1 flex gap-1 items-center';
+          wrap.innerHTML = `<span class="text-[10px] text-slate-400 w-16">Значение:</span>
+            <input class="set-const flex-1 bg-slate-800 border border-slate-600 rounded px-1 py-0.5 text-xs font-mono" value="${spec.value || ''}" placeholder="CLOSED / 1 / Активен">`;
+          box.appendChild(wrap);
+          const inp = wrap.querySelector('.set-const');
+          inp.oninput = () => { spec.value = inp.value; };
+        } else if (t === 'now' || t === 'NOW') {
+          const wrap = document.createElement('div');
+          wrap.className = 'flex-1 flex gap-1 items-center';
+          wrap.innerHTML = `<span class="text-[10px] text-slate-400 w-16">Формат:</span>
+            <input class="set-fmt flex-1 bg-slate-800 border border-slate-600 rounded px-1 py-0.5 text-xs font-mono" value="${spec.format || 'DD/MM/YYYY HH:mm:ss'}" placeholder="DD/MM/YYYY HH:mm:ss">
+            <span class="text-[9px] text-emerald-400">NOW</span>`;
+          box.appendChild(wrap);
+          const inp = wrap.querySelector('.set-fmt');
+          inp.oninput = () => { spec.format = inp.value.trim(); };
+        } else if (t === 'fromForm' || t === 'copy') {
+          const wrap = document.createElement('div');
+          wrap.className = 'flex-1 flex gap-1 items-center';
+          wrap.innerHTML = `<span class="text-[10px] text-slate-400 w-16">Источник:</span>
+            <select class="set-src flex-1 bg-slate-800 border border-slate-600 rounded px-1 py-0.5 text-xs"></select>`;
+          box.appendChild(wrap);
+          const sel = wrap.querySelector('.set-src');
+          const av = getAvailFields();
+          av.forEach(f => {
+            const o = document.createElement('option');
+            o.value = f.field; o.textContent = (f.title || f.field) + ' (' + f.field + ')';
+            if ((spec.sourceField || spec.source) === f.field) o.selected = true;
+            sel.appendChild(o);
+          });
+          sel.onchange = () => { spec.sourceField = sel.value; };
+          if (!spec.sourceField && av.length) spec.sourceField = av[0].field;
+        } else if (t === 'sql' || t === 'fromDB') {
+          const wrap = document.createElement('div');
+          wrap.className = 'w-full space-y-1';
+          wrap.innerHTML = `
+            <div class="flex gap-1"><span class="text-[10px] text-slate-400">SQL (SELECT ... возвращает 1 значение):</span></div>
+            <textarea class="set-sql w-full bg-slate-800 border border-slate-600 rounded px-1 py-0.5 text-xs font-mono" rows="2" placeholder="SELECT Status FROM Terminals WHERE TID = ?"></textarea>
+            <div class="text-[10px] text-slate-400">Параметры (порядок важен для ?):</div>
+            <div class="param-list space-y-0.5"></div>
+            <button class="add-param text-[10px] px-1.5 py-0 bg-slate-700 hover:bg-slate-600 rounded">+ Параметр (поле или константа)</button>
+          `;
+          box.appendChild(wrap);
+
+          const ta = wrap.querySelector('.set-sql');
+          ta.value = spec.query || '';
+          ta.oninput = () => { spec.query = ta.value; };
+
+          const pList = wrap.querySelector('.param-list');
+          const addP = wrap.querySelector('.add-param');
+
+          if (!Array.isArray(spec.paramSources)) spec.paramSources = [];
+
+          function renderParams() {
+            pList.innerHTML = '';
+            spec.paramSources.forEach((p, idx) => {
+              const pr = document.createElement('div');
+              pr.className = 'flex gap-1 items-center text-[10px]';
+              const kind = (p.kind || 'field');
+              pr.innerHTML = `
+                <select class="p-kind bg-slate-900 border border-slate-600 rounded px-1 text-xs">
+                  <option value="field">Поле формы</option>
+                  <option value="literal">Константа</option>
+                </select>
+                <input class="p-val flex-1 bg-slate-800 border border-slate-600 rounded px-1 py-0 text-xs" placeholder="имя поля или значение">
+                <button class="px-1 text-red-400">×</button>
+              `;
+              const kSel = pr.querySelector('.p-kind');
+              const vInp = pr.querySelector('.p-val');
+              const del = pr.querySelector('button');
+              kSel.value = kind;
+              vInp.value = p.val != null ? p.val : (p.name || '');
+              kSel.onchange = () => { p.kind = kSel.value; };
+              vInp.oninput = () => { p.val = vInp.value.trim(); if (kSel.value==='field') p.name = p.val; };
+              del.onclick = () => { spec.paramSources.splice(idx,1); renderParams(); };
+              pList.appendChild(pr);
+            });
+          }
+          renderParams();
+
+          addP.onclick = () => {
+            spec.paramSources.push({ kind: 'field', val: '' });
+            renderParams();
+          };
+        } else if (t === 'uuid' || t === 'UUID') {
+          const sp = document.createElement('span');
+          sp.className = 'text-[10px] text-emerald-400 italic';
+          sp.textContent = 'Будет сгенерирован UUID v4';
+          box.appendChild(sp);
+        } else if (t === 'empty') {
+          const sp = document.createElement('span');
+          sp.className = 'text-[10px] text-slate-500 italic';
+          sp.textContent = 'Поле будет очищено';
+          box.appendChild(sp);
+        }
+      }
+
+      function renderSetRows() {
+        rowsC.innerHTML = '';
+        const avail = getAvailFields();
+
+        (btn.set || []).forEach((spec, idx) => {
+          if (!spec.field && avail.length) spec.field = avail[0].field;
+
+          const row = document.createElement('div');
+          row.className = 'set-row border border-slate-700 bg-slate-950 rounded p-1.5 space-y-1';
+          row.innerHTML = `
+            <div class="flex gap-1 items-center">
+              <select class="set-field bg-slate-800 border border-slate-600 rounded px-1 py-0.5 text-xs flex-1"></select>
+              <select class="set-type bg-slate-800 border border-slate-600 rounded px-1 py-0.5 text-xs">
+                <option value="constant">Константа</option>
+                <option value="now">Сейчас (NOW + формат)</option>
+                <option value="today">Только дата (TODAY)</option>
+                <option value="fromForm">Из другого поля формы</option>
+                <option value="sql">Значение из БД (SQL запрос)</option>
+                <option value="currentUser">Текущий пользователь</option>
+                <option value="currentUserId">ID текущего пользователя</option>
+                <option value="uuid">UUID (уникальный)</option>
+                <option value="empty">Очистить (пусто)</option>
+              </select>
+              <button class="del-btn text-red-400 hover:text-red-500 px-1 text-sm font-bold" title="Удалить">×</button>
+            </div>
+            <div class="set-value-ui flex gap-1 text-xs"></div>
+          `;
+
+          const fSel = row.querySelector('.set-field');
+          const tSel = row.querySelector('.set-type');
+          const del = row.querySelector('.del-btn');
+
+          // fields
+          avail.forEach(f => {
+            const o = document.createElement('option');
+            o.value = f.field; o.textContent = f.title || f.field;
+            if (f.field === spec.field) o.selected = true;
+            fSel.appendChild(o);
+          });
+          if (!avail.find(f=>f.field===spec.field) && spec.field) {
+            const oo = document.createElement('option'); oo.value = spec.field; oo.textContent = spec.field; oo.selected=true;
+            fSel.appendChild(oo);
+          }
+
+          tSel.value = spec.valueType || 'constant';
+
+          // initial value ui
+          createValueUI(row, spec);
+
+          fSel.onchange = () => {
+            spec.field = fSel.value;
+          };
+          tSel.onchange = () => {
+            spec.valueType = tSel.value;
+            // reset dependent fields for clean switch
+            if (spec.valueType === 'constant') { spec.value = spec.value || ''; delete spec.format; delete spec.sourceField; delete spec.query; delete spec.paramSources; }
+            else if (spec.valueType === 'now' || spec.valueType==='today') { spec.format = spec.format || (spec.valueType==='now' ? 'DD/MM/YYYY HH:mm:ss' : 'DD/MM/YYYY'); delete spec.sourceField; delete spec.query; delete spec.paramSources; }
+            else if (spec.valueType === 'fromForm') { spec.sourceField = spec.sourceField || (avail[0]&&avail[0].field); delete spec.format; delete spec.query; delete spec.paramSources; }
+            else if (spec.valueType === 'sql' || spec.valueType==='fromDB') { if(!spec.query) spec.query=''; if(!Array.isArray(spec.paramSources)) spec.paramSources=[]; delete spec.format; delete spec.sourceField; delete spec.value; }
+            else { delete spec.format; delete spec.sourceField; delete spec.query; delete spec.paramSources; }
+            createValueUI(row, spec);
+          };
+          del.onclick = () => {
+            btn.set.splice(idx, 1);
+            renderSetRows();
+          };
+
+          rowsC.appendChild(row);
+        });
+      }
+
+      addB.onclick = () => {
+        const avail = getAvailFields();
+        if (avail.length === 0) return;
+        btn.set.push({
+          field: avail[0].field,
+          valueType: 'constant',
+          value: ''
+        });
+        renderSetRows();
+      };
+
+      saveAfterChk.onchange = () => { btn.saveAfter = saveAfterChk.checked; };
+
+      renderSetRows();
+    }
+  }
+
+  actionSel.onchange = renderConfigArea;
+  renderConfigArea(); // initial
+
+  modal.querySelector('#cancel-btn').onclick = () => modal.remove();
+  modal.querySelector('#close-btn').onclick = () => modal.remove();
+
+  modal.querySelector('#save-btn').onclick = () => {
+    // gather from inputs
+    btn.label = modal.querySelector('#btn-label').value.trim() || btn.label;
+    btn.action = actionSel.value;
+    btn.position = posSel.value;
+
+    btn.style = {
+      bg: modal.querySelector('#btn-bg').value,
+      color: modal.querySelector('#btn-color').value,
+      width: modal.querySelector('#btn-width').value,
+      height: modal.querySelector('#btn-height').value
+    };
+
+    // modes (insert/update/delete)
+    btn.modes = [];
+    if (modeInsert && modeInsert.checked) btn.modes.push('insert');
+    if (modeUpdate && modeUpdate.checked) btn.modes.push('update');
+    if (modeDelete && modeDelete.checked) btn.modes.push('delete');
+    if (btn.modes.length === 0) {
+      btn.modes = ['insert', 'update']; // безопасный дефолт
+    }
+
+    // action-specific already updated live in btn object via listeners
+    if (actionSel.value === 'setFields') {
+      const chk = configArea.querySelector('#set-save-after');
+      if (chk) btn.saveAfter = chk.checked;
+    }
+
+    onSave(btn);
+    modal.remove();
+  };
+
+  // initial select value
+  setTimeout(() => {
+    actionSel.value = btn.action || 'importExcel';
+    posSel.value = btn.position || 'top';
+    renderConfigArea();
+  }, 0);
+}
+
+async function deleteFormButton(index) {
+  if (await customConfirm('Удалить кнопку?')) {
+    currentWindowConfig.formCustomButtons.splice(index, 1);
+    renderFormButtonsList();
+  }
+}
+
+function renderRowFormattingList() {
+  const container = document.getElementById('row-formatting-list');
+  if (!container) return;
+  const rules = currentWindowConfig.rowFormatting || [];
+  container.innerHTML = '';
+  if (rules.length === 0) {
+    container.innerHTML = '<div class="text-slate-500 text-xs p-1">Нет правил. Нажми + чтобы добавить (например: closeDate не пусто → красный бордер).</div>';
+    return;
+  }
+  rules.forEach((rule, i) => {
+    const div = document.createElement('div');
+    div.className = 'bg-slate-900 border border-slate-700 p-2 rounded flex justify-between items-start text-xs';
+    const stylePreview = rule.style ? Object.keys(rule.style).map(k => k + ':' + rule.style[k]).join('; ').slice(0,60) : '';
+    const opText = rule.operator || 'notEmpty';
+    div.innerHTML = `
+      <div class="flex-1">
+        <div><span class="font-semibold">${rule.field || '?'}</span> <span class="text-red-400">${opText}</span> ${rule.value ? '= ' + rule.value : ''} ${rule.enabled === false ? '<span class="text-slate-500">(выкл)</span>' : ''}</div>
+        <div class="text-[9px] text-slate-400 mt-0.5 flex items-center gap-1">${stylePreview}
+          ${rule.style && rule.style.backgroundColor ? `<span class="inline-block w-3 h-3 rounded border" style="background:${rule.style.backgroundColor}"></span>` : ''}
+          ${rule.style && rule.style.color ? `<span class="inline-block w-3 h-3 rounded border" style="background:${rule.style.color}"></span>` : ''}
+          ${rule.style && rule.style.border ? `<span class="inline-block w-3 h-3 rounded border" style="border:1px solid ${rule.style.border.match(/#[0-9a-fA-F]{3,6}/)?.[0] || '#ccc'}"></span>` : ''}
+        </div>
+      </div>
+      <div class="flex gap-1 text-[10px]">
+        <button class="px-1.5 bg-emerald-700 rounded" onclick="editRowFormattingRule(${i})">✎</button>
+        <button class="px-1.5 bg-red-700 rounded" onclick="deleteRowFormattingRule(${i})">×</button>
+      </div>
+    `;
+    container.appendChild(div);
+  });
+}
+
+function addRowFormattingRule() {
+  const newRule = {
+    field: (currentWindowConfig.fields && currentWindowConfig.fields[0] && currentWindowConfig.fields[0].field) || 'closeDate',
+    operator: 'notEmpty',
+    value: '',
+    style: { border: '2px solid #dc2626', backgroundColor: '#fee2e2' },
+    enabled: true
+  };
+  if (!currentWindowConfig.rowFormatting) currentWindowConfig.rowFormatting = [];
+  currentWindowConfig.rowFormatting.push(newRule);
+  renderRowFormattingList();
+  // Immediately open editor for the new one
+  editRowFormattingRule(currentWindowConfig.rowFormatting.length - 1);
+}
+
+function editRowFormattingRule(index) {
+  const rule = currentWindowConfig.rowFormatting[index];
+  if (!rule) return;
+
+  const fields = (currentWindowConfig.fields || []).map(f => f.field);
+  const ops = ['notEmpty', 'empty', 'equals', 'notEquals', 'contains', 'notContains', 'gt', 'lt'];
+
+  const modal = document.createElement('div');
+  modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-[999]';
+  modal.innerHTML = `
+    <div class="bg-slate-800 border border-slate-600 rounded-2xl w-full max-w-md p-5">
+      <div class="font-semibold mb-3">Правило форматирования строки</div>
+      <div class="space-y-3 text-sm">
+        <div>
+          <label class="block text-xs text-slate-400">Поле</label>
+          <select id="rf-field" class="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1">
+            ${fields.map(f => `<option value="${f}" ${f===rule.field?'selected':''}>${f}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs text-slate-400">Оператор</label>
+          <select id="rf-op" class="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1">
+            ${ops.map(o => `<option value="${o}" ${o===rule.operator?'selected':''}>${o}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs text-slate-400">Значение (для equals/contains/gt...)</label>
+          <input id="rf-val" value="${rule.value || ''}" class="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1">
+        </div>
+        <div>
+          <label class="block text-xs text-slate-400">Border color</label>
+          <input id="rf-border-color" type="color" value="${(rule.style && rule.style.border && rule.style.border.match(/#[0-9a-fA-F]{3,6}/)?.[0]) || '#dc2626'}" class="w-full h-9 bg-slate-900 border border-slate-600 rounded cursor-pointer">
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="block text-xs text-slate-400">Background</label>
+            <input id="rf-bg" type="color" value="${rule.style && rule.style.backgroundColor ? rule.style.backgroundColor : '#fee2e2'}" class="w-full h-9 bg-slate-900 border border-slate-600 rounded cursor-pointer">
+          </div>
+          <div>
+            <label class="block text-xs text-slate-400">Text color</label>
+            <input id="rf-color" type="color" value="${rule.style && rule.style.color ? rule.style.color : '#7f1d1d'}" class="w-full h-9 bg-slate-900 border border-slate-600 rounded cursor-pointer">
+          </div>
+        </div>
+        <div>
+          <label class="block text-xs text-slate-400">Advanced border (full css, optional)</label>
+          <input id="rf-border" value="${rule.style && rule.style.border || ''}" placeholder="2px solid #dc2626 or 1px dashed red" class="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 text-xs">
+        </div>
+        <label class="flex items-center gap-2 text-xs"><input type="checkbox" id="rf-enabled" ${rule.enabled !== false ? 'checked' : ''}> Включено</label>
+      </div>
+      <div class="mt-4 flex gap-2">
+        <button id="rf-save" class="flex-1 bg-emerald-600 hover:bg-emerald-500 px-3 py-1.5 rounded">Сохранить</button>
+        <button id="rf-cancel" class="flex-1 bg-slate-700 hover:bg-slate-600 px-3 py-1.5 rounded">Отмена</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+
+  modal.querySelector('#rf-cancel').onclick = () => modal.remove();
+  modal.querySelector('#rf-save').onclick = () => {
+    rule.field = modal.querySelector('#rf-field').value;
+    rule.operator = modal.querySelector('#rf-op').value;
+    rule.value = modal.querySelector('#rf-val').value;
+    rule.enabled = modal.querySelector('#rf-enabled').checked;
+    rule.style = rule.style || {};
+    const borderFull = modal.querySelector('#rf-border').value.trim();
+    const borderColor = modal.querySelector('#rf-border-color').value;
+    const bg = modal.querySelector('#rf-bg').value;
+    const c = modal.querySelector('#rf-color').value;
+
+    if (borderFull) {
+      rule.style.border = borderFull;
+    } else if (borderColor) {
+      rule.style.border = `2px solid ${borderColor}`;
+    } else {
+      delete rule.style.border;
+    }
+
+    if (bg) rule.style.backgroundColor = bg; else delete rule.style.backgroundColor;
+    if (c) rule.style.color = c; else delete rule.style.color;
+
+    if (Object.keys(rule.style).length === 0) delete rule.style;
+
+    renderRowFormattingList();
+    modal.remove();
+  };
+}
+
+function deleteRowFormattingRule(index) {
+  if (!currentWindowConfig.rowFormatting) return;
+  currentWindowConfig.rowFormatting.splice(index, 1);
+  renderRowFormattingList();
 }
 
 // Helper to get table for operation per window
@@ -2797,13 +4786,14 @@ async function addNewWindow() {
     if (!Array.isArray(fullConfig.windows)) fullConfig.windows = [];
     fullConfig.windows.push(newWin);
 
-    alert('Новое окно добавлено. Теперь настройте INSERT/UPDATE/DELETE для него и нажмите «Сохранить конфиг».');
+    showToast('Новое окно добавлено. Теперь настройте INSERT/UPDATE/DELETE для него и нажмите «Сохранить конфиг».');
     // refresh sidebar list
     refreshWindowList();
 
     // IMPORTANT: Stay inside admin (do not call loadWindow)
     // Set as current and re-open admin UI so user can immediately configure per-window tables/fields
     currentWindowConfig = normalizeWindowConfig(newWin);
+    if (!Array.isArray(currentWindowConfig.rowFormatting)) currentWindowConfig.rowFormatting = [];
     renderAdminConfigUI();
 }
 
@@ -2812,19 +4802,73 @@ function refreshWindowList() {
     if (!list || !fullConfig) return;
     if (!fullConfig.windows) fullConfig.windows = [];
     list.innerHTML = '';
-    fullConfig.windows.forEach((win, index) => {
-        const btn = document.createElement('button');
-        btn.className = 'w-full text-left px-4 py-2.5 flex items-center gap-3 text-sm transition-colors hover:bg-slate-700 ' + (index === 0 ? 'bg-slate-700' : '');
+
+    const currentWinId = currentWindowConfig ? String(currentWindowConfig.id || currentWindowConfig.windowId || currentWindowConfig.title) : null;
+
+    // Respect per-user WINDOWS_ACCESS (comma list). ADMIN sees all.
+    const allowed = (currentUser && currentUser.windowsAccess)
+      ? String(currentUser.windowsAccess).split(',').map(s => s.trim()).filter(Boolean)
+      : null;
+
+    const visibleWindows = fullConfig.windows.filter(win => {
+      const wid = String(win.id || win.windowId || win.title);
+      if (!allowed || allowed.length === 0) return true;
+      if (currentUser && currentUser.role === 'ADMIN') return true;
+      return allowed.includes(wid);
+    });
+
+    visibleWindows.forEach((win) => {
+        const winId = String(win.id || win.windowId || win.title);
+        const isActive = currentWinId && winId === currentWinId;
         const icon = win.icon || 'fa-table';
         const hasRels = (win.relations && win.relations.length > 0) ? '<i class="fas fa-link text-[10px] text-violet-400 ml-1"></i>' : '';
-        btn.innerHTML = '<i class="fas ' + icon + ' text-cyan-400"></i><span class="font-medium">' + win.title + '</span>' + hasRels;
-        btn.onclick = () => {
-            document.querySelectorAll('#window-list button').forEach(b => b.classList.remove('bg-slate-700'));
-            btn.classList.add('bg-slate-700');
-            (window.loadWindow || loadWindow || function(w){ console.error('loadWindow not ready'); })(win);
-        };
+
+        const btn = document.createElement('button');
+        btn.dataset.windowId = winId;
+
+        if (sidebarCollapsed) {
+            // Collapsed: small icon only, beautiful and clear active state
+            btn.className = `w-9 h-9 mx-auto mb-1 flex items-center justify-center rounded-lg transition-all text-lg ${isActive 
+                ? 'bg-blue-600 text-white shadow-sm ring-1 ring-blue-400' 
+                : 'hover:bg-slate-700 text-blue-400 hover:text-blue-300'}`;
+            btn.innerHTML = `<i class="fas ${icon}"></i>`;
+            btn.title = win.title + (hasRels ? ' (связанные)' : '');
+            btn.onclick = () => {
+                // loadWindow + refreshWindowList will set the correct active highlight dynamically
+                (window.loadWindow || loadWindow || function(w){ console.error('loadWindow not ready'); })(win);
+            };
+        } else {
+            // Full: normal with text
+            btn.className = `w-full text-left px-4 py-2.5 flex items-center gap-3 text-sm transition-colors hover:bg-slate-700 rounded-lg ${isActive ? 'bg-slate-700' : ''}`;
+            btn.innerHTML = '<i class="fas ' + icon + ' text-blue-400"></i><span class="font-medium">' + win.title + '</span>' + hasRels;
+            btn.onclick = () => {
+                // loadWindow + refreshWindowList handles active highlight + title update (dynamic on window choice)
+                (window.loadWindow || loadWindow || function(w){ console.error('loadWindow not ready'); })(win);
+            };
+        }
+
         list.appendChild(btn);
     });
+
+    // Admin button (always full text or icon based on collapsed)
+    if (currentUser && currentUser.role === 'ADMIN') {
+        const adminBtn = document.createElement('button');
+        adminBtn.dataset.role = 'admin';
+        if (sidebarCollapsed) {
+            adminBtn.className = `w-9 h-9 mx-auto mt-3 flex items-center justify-center rounded-lg transition-all text-lg text-amber-400 hover:bg-slate-700 hover:text-amber-300`;
+            adminBtn.innerHTML = `<i class="fas fa-cog"></i>`;
+            adminBtn.title = 'Администрирование';
+        } else {
+            adminBtn.className = 'w-full text-left px-4 py-2.5 flex items-center gap-3 text-sm mt-2 border-t border-slate-700 pt-2 text-amber-400 hover:text-amber-300 hover:bg-slate-700 rounded-lg';
+            adminBtn.innerHTML = '<i class="fas fa-cog text-yellow-400"></i><span class="font-medium text-yellow-400">Администрирование</span>';
+        }
+        adminBtn.onclick = () => {
+            document.querySelectorAll('#window-list button').forEach(b => b.classList.remove('bg-slate-700', 'bg-blue-600', 'ring-1', 'ring-blue-400'));
+            if (!sidebarCollapsed) adminBtn.classList.add('bg-slate-700');
+            if (window.openAdminWindow) window.openAdminWindow();
+        };
+        list.appendChild(adminBtn);
+    }
 }
 
 function renderInsertFieldsList() {
@@ -2958,10 +5002,13 @@ async function openFieldEditor(field, onSave, siblingFields = []) {
             ${field.conditionalDefaults && field.conditionalDefaults.length ? `<span class="px-1.5 py-0.5 bg-teal-600 rounded">cdef:${field.conditionalDefaults.length}</span>` : ''}
             ${field.searchable && field.type === 'select' ? `<span class="px-1.5 py-0.5 bg-blue-700 rounded">searchable</span>` : ''}
             ${field.dependsOn ? `<span class="px-1.5 py-0.5 bg-amber-700 rounded">dependsOn:${field.dependsOn}</span>` : ''}
-            ${field.lookupQuery || field.lookupWindow ? `<span class="px-1.5 py-0.5 bg-sky-700 rounded">has lookupQuery</span>` : ''}
+            ${field.lookupQuery || field.lookupWindow ? `<span class="px-1.5 py-0.5 bg-blue-700 rounded">has lookupQuery</span>` : ''}
             ${field.conditional ? `<span class="px-1.5 py-0.5 bg-violet-700 rounded">conditional</span>` : ''}
             ${ (field.autoValue || field.systemVariable) ? `<span class="px-1.5 py-0.5 bg-purple-700 rounded">auto</span>` : ''}
             ${field.validations && field.validations.length ? `<span class="px-1.5 py-0.5 bg-red-800 rounded">rules:${field.validations.length}</span>` : ''}
+            ${field.disabled ? `<span class="px-1.5 py-0.5 bg-gray-700 rounded">disabled</span>` : ''}
+            ${field.readonly ? `<span class="px-1.5 py-0.5 bg-blue-700 rounded">readonly</span>` : ''}
+            ${field.hiddenInForm ? `<span class="px-1.5 py-0.5 bg-red-700 rounded">hidden</span>` : ''}
         </div>`;
 
     modal.innerHTML = `
@@ -3004,15 +5051,15 @@ async function openFieldEditor(field, onSave, siblingFields = []) {
                   <option value="number">number</option>
                   <option value="date">date</option>
                   <option value="checkbox">checkbox (отмечен → дата если checkedValue=date, иначе пусто)</option>
-                  <option value="select">select — классический выпадающий (можно сделать поисковым)</option>
-                  <option value="lookup">lookup — ввод с автоподсказками и фильтром</option>
+                  <option value="select">select — обычный выпадающий список</option>
+                  <option value="lookup">lookup — поле ввода + выпадающий список С ПОИСКОМ И ПРОКРУТКОЙ (рекомендуется)</option>
                 </select>
               </div>
 
               <!-- Поисковый -->
               <div class="md:col-span-2">
                 <label class="flex items-center gap-2 text-[10px] text-slate-400 mb-0.5 cursor-pointer">
-                  <input id="fe-searchable" type="checkbox" ${field.searchable ? 'checked' : ''} class="accent-cyan-500">
+                  <input id="fe-searchable" type="checkbox" ${field.searchable ? 'checked' : ''} class="accent-blue-500">
                   <span>Сделать поисковым (вместо обычного выпадающего списка — ввод с фильтрацией)</span>
                 </label>
               </div>
@@ -3079,18 +5126,29 @@ async function openFieldEditor(field, onSave, siblingFields = []) {
                 <input id="fe-hidden" type="checkbox" ${field.hiddenInForm ? 'checked':''} class="accent-emerald-500 w-3.5 h-3.5">
                 <span>Скрытое</span>
               </label>
+              <label class="flex items-center gap-2 text-xs cursor-pointer bg-slate-900 border border-slate-700 px-3 py-1 rounded-lg hover:border-emerald-600">
+                <input id="fe-disabled" type="checkbox" ${field.disabled ? 'checked':''} class="accent-emerald-500 w-3.5 h-3.5">
+                <span>Disabled (нельзя менять)</span>
+              </label>
+              <label class="flex items-center gap-2 text-xs cursor-pointer bg-slate-900 border border-slate-700 px-3 py-1 rounded-lg hover:border-emerald-600">
+                <input id="fe-readonly" type="checkbox" ${field.readonly ? 'checked':''} class="accent-emerald-500 w-3.5 h-3.5">
+                <span>Readonly (нельзя редактировать)</span>
+              </label>
             </div>
           </div>
 
           <!-- LOOKUP SOURCE + DEPENDS - this is the "Связанные / Зависимые колонки" section -->
-          <div id="fe-lookup-source-block" class="border border-sky-700 rounded-2xl p-3 bg-slate-900/60">
-            <div class="font-semibold text-sky-400 mb-1 flex items-center gap-2">
+          <div id="fe-lookup-source-block" class="border border-blue-700 rounded-2xl p-3 bg-slate-900/60">
+            <div class="font-semibold text-blue-400 mb-1 flex items-center gap-2">
               <i class="fas fa-database"></i> Источник данных + Зависимости (Связанные / Зависимые колонки)
             </div>
             <div class="text-[9px] text-slate-400 mb-2 leading-tight">
-              <b>Связь:</b> Выбрали вверху <b>Тип поля = select или lookup</b> → обязательно заполняй этот блок.<br>
-              <b>Простой lookup</b> (без зависимости): Тип поля = lookup + здесь "SQL запрос" + dependsOn пустой.<br>
-              <b>Cascading / зависимый</b> (Связанные колонки): укажи <b>Зависит от поля</b> + запрос с <b>?</b>.
+              <b>3 режима для списков / автоподстановки:</b><br>
+              • <b>Авто одно значение (без списка)</b> — System/Auto (фиолетовый) + SQL/CONSTANT<br>
+              • <b>Выпадающий с поиском + скролл из базы</b> — выбери "SQL запрос"<br>
+              • <b>Ручной выпадающий список (без базы, свои варианты)</b> — выбери "Ручной список" и перечисли варианты<br>
+              Выбери <b>lookup</b> (а не select) чтобы был красивый поиск + скролл.<br>
+              <b>Условный источник (conditional):</b> dependsOn + в "Условный" можно задать основной SQL + особые случаи (если значение = "Երևан" → другой SELECT).
             </div>
             
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -3103,15 +5161,17 @@ async function openFieldEditor(field, onSave, siblingFields = []) {
                 <label class="text-xs text-slate-400">Тип источника данных</label>
                 <select id="fe-lookup-type" class="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5">
                   <option value="">— без списка —</option>
-                  <option value="query" ${ (field.lookupQuery) ? 'selected' : '' }>SQL запрос (рекомендуется для простого)</option>
+                  <option value="static" ${ (field.options && field.options.length) ? 'selected' : '' }>Ручной список (несколько вариантов вручную, без БД)</option>
+                  <option value="query" ${ (field.lookupQuery) ? 'selected' : '' }>SQL запрос (список из базы)</option>
                   <option value="window" ${ (field.lookupWindow) ? 'selected' : '' }>Другое окно (таблица)</option>
-                  <option value="conditional" ${ (field.lookupQuery && field.dependsOn) ? 'selected' : '' }>Условный по dependsOn (cascading)</option>
+                  <option value="conditional" ${ (field.lookupQuery && field.dependsOn) ? 'selected' : '' }>Условный (cascading + разные запросы по значению, напр. если Город=Երևан)</option>
                 </select>
               </div>
             </div>
 
             <div id="fe-lookup-config" class="mt-2 space-y-2"></div>
-            <div class="text-[9px] text-sky-300 mt-1">Простой пример: SELECT DISTINCT mcc as value, mcc as display FROM MERCHANTS  (оставь dependsOn пустым)</div>
+            <div class="text-[9px] text-blue-300 mt-1">Простой пример: SELECT DISTINCT mcc as value, mcc as display FROM MERCHANTS  (оставь dependsOn пустым)</div>
+            <div class="text-[9px] text-amber-400 mt-1">⚠ Для автоподстановки <b>одного</b> значения без выбора — используй <b>System/Auto → SQL</b> (фиолетовый). Для списка вариантов (с поиском) — здесь.</div>
           </div>
 
           <!-- ADD ADVANCED FEATURE (dropdown driven as user asked) -->
@@ -3129,7 +5189,7 @@ async function openFieldEditor(field, onSave, siblingFields = []) {
                   <option value="transform">Transform / Извлечь (первые N символов, split по разделителю — напр. 5411 из "5411 - магазин")</option>
                   <option value="cond_default">Conditional default (если поле X = val → установить default Y)</option>
                 </select>
-                <button id="fe-add-feature" class="px-4 py-1.5 bg-amber-600 hover:bg-amber-500 text-sm rounded-xl whitespace-nowrap">Добавить</button>
+                <button id="fe-add-feature" class="px-4 py-1.5 bg-amber-700 hover:bg-amber-600 text-sm rounded-xl whitespace-nowrap">Добавить</button>
               </div>
               <div class="text-[10px] text-slate-400 mt-0.5">Выбери тип → заполни параметры → нажми Добавить</div>
             </div>
@@ -3201,7 +5261,7 @@ async function openFieldEditor(field, onSave, siblingFields = []) {
           <div class="text-[10px] text-slate-500 self-center">Изменения применятся после «Сохранить» в админке</div>
           <div class="flex gap-2">
             <button id="fe-cancel" class="px-5 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-2xl text-sm">Отмена</button>
-            <button id="fe-save" class="px-6 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-2xl text-sm font-semibold">Сохранить поле</button>
+            <button id="fe-save" class="px-6 py-1.5 bg-emerald-700 hover:bg-emerald-600 rounded-2xl text-sm font-semibold">Сохранить поле</button>
           </div>
         </div>
       </div>`;
@@ -3217,21 +5277,49 @@ async function openFieldEditor(field, onSave, siblingFields = []) {
     function renderLookupConfig() {
       const type = modal.querySelector('#fe-lookup-type').value;
       let html = '';
-      if (type === 'query' || type === 'conditional') {
+      if (type === 'static') {
+        // Ручной список вариантов (без обращения к базе)
+        const staticText = Array.isArray(field.options) 
+          ? field.options.map(o => (typeof o === 'string' ? o : (o.value && o.display ? o.value + '|' + o.display : o.value || ''))).join('\n')
+          : (field.options || '');
         html = `
           <div>
-            <label class="text-xs text-sky-300">SQL для выборки (используйте ? для параметра, если есть dependsOn)</label>
-            <textarea id="fe-lookup-query" class="w-full font-mono text-xs bg-slate-950 border border-sky-800 h-16 rounded p-2">${field.lookupQuery || 'SELECT DISTINCT value_col as value, display_col as display FROM table_name'}</textarea>
-            <div class="text-[9px] text-slate-400">Простой (без dependsOn): SELECT ... без WHERE.<br>Cascading: WHERE родительское_поле = ? </div>
+            <label class="text-xs text-blue-300 font-semibold">Ручные варианты (по одному на строке)</label>
+            <textarea id="fe-static-options" class="w-full font-mono text-xs bg-slate-950 border border-blue-800 h-20 rounded p-2" placeholder="Вариант1&#10;5411|Магазин&#10;5412|Супермаркет&#10;или просто одно слово на строке">${staticText}</textarea>
+            <div class="text-[9px] text-slate-400 mt-0.5">Формат: <b>значение</b> или <b>значение|отображаемый текст</b>. Будет красивый выпадающий список с поиском и прокруткой.</div>
+          </div>`;
+      } else if (type === 'query' || type === 'conditional') {
+        const conds = Array.isArray(field.lookupConditions) ? field.lookupConditions : [];
+        let condHtml = conds.map((c, i) => `
+          <div class="flex gap-2 items-start border border-blue-800 p-1 rounded mb-1">
+            <div class="flex-1">
+              <input class="fe-cond-val w-full text-xs bg-slate-900 border px-1 py-0.5 rounded" value="${c.value || ''}" placeholder="Значение dependsOn (напр. Երևան)">
+              <textarea class="fe-cond-query w-full font-mono text-xs bg-slate-950 border h-10 rounded p-1 mt-1" placeholder="SELECT ... FROM ...">${c.query || ''}</textarea>
+            </div>
+            <button type="button" class="text-red-400 text-xs px-1" onclick="this.closest('.flex').remove()">×</button>
+          </div>`).join('');
+
+        html = `
+          <div>
+            <label class="text-xs text-blue-300">Основной SQL (для всех значений dependsOn, используйте ? )</label>
+            <textarea id="fe-lookup-query" class="w-full font-mono text-xs bg-slate-950 border border-blue-800 h-12 rounded p-2">${field.lookupQuery || 'SELECT DISTINCT value_col as value, display_col as display FROM table_name WHERE parent = ?'}</textarea>
+            <div class="text-[9px] text-slate-400">Обычный cascading: WHERE xxx = ? <br>Можно один запрос с CASE WHEN ? = 'Երևան' ... или UNION ALL для разных таблиц (код автоматически повторит параметр).</div>
           </div>
-          <div class="grid grid-cols-2 gap-2">
-            <div><label class="text-xs">Value field (что сохраняем)</label><input id="fe-lookup-val" value="${field.lookupValueField || ''}" class="w-full text-xs bg-slate-900 border px-2 py-1 rounded" placeholder="mcc или id"></div>
-            <div><label class="text-xs">Display field (что показываем)</label><input id="fe-lookup-disp" value="${field.lookupDisplayField || ''}" class="w-full text-xs bg-slate-900 border px-2 py-1 rounded" placeholder="название или то же"></div>
+          <div class="mt-2">
+            <div class="flex justify-between items-center mb-1">
+              <label class="text-xs text-amber-300">Условные запросы (если dependsOn == значение)</label>
+              <button type="button" id="fe-add-cond" class="text-[10px] bg-amber-700 px-2 py-0.5 rounded">+ Добавить условие</button>
+            </div>
+            <div id="fe-cond-list">${condHtml || '<div class="text-[10px] text-slate-500">Например: значение=Երևան → запрос из DISTRICTS'}</div>
+          </div>
+          <div class="grid grid-cols-2 gap-2 mt-1">
+            <div><label class="text-xs">Value field</label><input id="fe-lookup-val" value="${field.lookupValueField || ''}" class="w-full text-xs bg-slate-900 border px-2 py-1 rounded" placeholder="name или id"></div>
+            <div><label class="text-xs">Display field</label><input id="fe-lookup-disp" value="${field.lookupDisplayField || ''}" class="w-full text-xs bg-slate-900 border px-2 py-1 rounded" placeholder="display или то же"></div>
           </div>`;
       } else if (type === 'window') {
         html = `
           <div>
-            <label class="text-xs text-sky-300">ID окна для lookup</label>
+            <label class="text-xs text-blue-300">ID окна для lookup</label>
             <input id="fe-lookup-win" value="${field.lookupWindow || ''}" class="w-full bg-slate-900 border px-2 py-1 rounded text-xs">
             <div class="text-[9px]">Будет использован query из того окна. Можно указать dependsOn для фильтра.</div>
           </div>`;
@@ -3254,6 +5342,27 @@ async function openFieldEditor(field, onSave, siblingFields = []) {
     }
 
     renderLookupConfig();   // initial
+
+    // Handle dynamic "add condition" for conditional lookups (Yerevan special case etc.)
+    const attachCondAdd = () => {
+      const addBtn = modal.querySelector('#fe-add-cond');
+      const list = modal.querySelector('#fe-cond-list');
+      if (addBtn && list) {
+        addBtn.onclick = () => {
+          const div = document.createElement('div');
+          div.className = 'flex gap-2 items-start border border-blue-800 p-1 rounded mb-1';
+          div.innerHTML = `
+            <div class="flex-1">
+              <input class="fe-cond-val w-full text-xs bg-slate-900 border px-1 py-0.5 rounded" placeholder="Значение (напр. Երևան)">
+              <textarea class="fe-cond-query w-full font-mono text-xs bg-slate-950 border h-10 rounded p-1 mt-1" placeholder="SELECT DistrictName as value ... FROM DISTRICTS"></textarea>
+            </div>
+            <button type="button" class="text-red-400 text-xs px-1" onclick="this.closest('.flex').remove()">×</button>
+          `;
+          list.appendChild(div);
+        };
+      }
+    };
+    setTimeout(attachCondAdd, 50);
 
     // === CONNECTION between "Тип поля" (top) and lookup source block (clear link) ===
     function updateLookupSourceVisibility() {
@@ -3588,7 +5697,12 @@ async function openFieldEditor(field, onSave, siblingFields = []) {
 
       // validations
       (field.validations || []).forEach((v, idx) => {
-        let desc = `${v.type}${v.min !== undefined ? ' min:'+v.min : ''}${v.max !== undefined ? ' max:'+v.max : ''}${v.value ? ' val:'+v.value : ''}${v.language ? ' '+v.language : ''}${v.condition ? ' if:'+v.condition : ''}`;
+        let langPart = '';
+        if (v.language) {
+          langPart = ' ' + getLanguageDisplayName(v.language);
+        }
+        let desc = `${v.type}${v.min !== undefined ? ' min:'+v.min : ''}${v.max !== undefined ? ' max:'+v.max : ''}${v.value ? ' val:'+v.value : ''}${langPart}${v.condition ? ' if:'+v.condition : ''}${v.fields ? ' fields:'+v.fields.join(',') : ''}${v.query ? ' q:'+v.query.substring(0,30) : ''}`;
+        if (v.error) desc += ` [error: ${v.error}]`;
         const el = document.createElement('div');
         el.className = 'flex justify-between bg-slate-800 px-2 py-0.5 rounded items-center text-[11px]';
         el.innerHTML = `<span><span class="bg-red-900 text-red-200 px-1 rounded mr-1">${v.type}</span> ${desc}</span> <span class="flex gap-1"><button class="text-emerald-400 hover:text-emerald-300" data-type="val-edit" data-idx="${idx}">✎</button><button class="text-red-400 hover:text-red-500" data-type="val" data-idx="${idx}">×</button></span>`;
@@ -3692,16 +5806,40 @@ async function openFieldEditor(field, onSave, siblingFields = []) {
         } else if (t === 'position') {
           params.innerHTML = `<input placeholder="start (1-based)" id="p-start" value="${v.start||1}" class="bg-slate-800 px-1 rounded"> <input placeholder="длина" id="p-len" value="${v.length||''}" class="bg-slate-800 px-1 rounded"> <input placeholder="ожидаемое значение" id="p-val" value="${v.value||''}" class="bg-slate-800 px-1 rounded">`;
         } else if (t === 'language') {
-          params.innerHTML = `<select id="p-lang" class="bg-slate-800 px-1 rounded col-span-3"><option>armenian</option><option>latin</option><option>cyrillic</option><option>digits</option><option>alphanumeric</option></select>`;
-          if (v.language) featureArea.querySelector('#p-lang').value = v.language;
+          params.innerHTML = `
+            <select id="p-lang" class="bg-slate-800 px-1 rounded w-full">
+              <option value="armenian">armenian</option>
+              <option value="armenian_alphanumeric">armenian + digits + symbols</option>
+              <option value="latin">latin</option>
+              <option value="latin_alphanumeric">latin + digits + symbols</option>
+              <option value="cyrillic">cyrillic</option>
+              <option value="cyrillic_alphanumeric">cyrillic + digits + symbols</option>
+              <option value="digits">digits</option>
+              <option value="alphanumeric">latin letters + digits</option>
+            </select>
+            <input id="p-err" placeholder="Сообщение об ошибке (опц) - your custom text here" value="${v.error || ''}" class="bg-slate-800 px-1 rounded w-full mt-1">`;
+          setTimeout(() => {
+            const langSel = featureArea.querySelector('#p-lang');
+            const errIn = featureArea.querySelector('#p-err');
+            if (langSel && v.language) langSel.value = v.language;
+            if (errIn && v.error) errIn.value = v.error;
+          }, 0);
         } else if (t === 'pattern' || t === 'unique' || t === 'custom') {
           if (t === 'custom') {
             params.innerHTML = `
               <input id="p-cond" placeholder="if условие, напр. value > 1" value="${v.condition || ''}" class="bg-slate-800 px-1 rounded">
               <input id="p-pattern" placeholder="SQL с ? (опционально)" value="${v.query || ''}" class="bg-slate-800 px-1 rounded">
+              <input id="p-err" placeholder="Сообщение об ошибке (обяз.)" value="${v.error || ''}" class="bg-slate-800 px-1 rounded col-span-3">
+            `;
+          } else if (t === 'unique') {
+            params.innerHTML = `
+              <input id="p-pattern" placeholder="SQL с ? , напр. SELECT 1 FROM t WHERE tid=? AND mid=?" value="${v.query || ''}" class="bg-slate-800 px-1 rounded col-span-2">
+              <input id="p-fields" placeholder="поля comma: TerminalID,MerchantID" value="${(v.fields||[]).join(',')}" class="bg-slate-800 px-1 rounded">
+              <input id="p-err" placeholder="Сообщение об ошибке (обяз.)" value="${v.error || ''}" class="bg-slate-800 px-1 rounded col-span-3">
             `;
           } else {
-            params.innerHTML = `<input id="p-pattern" placeholder="${t==='pattern'?'regex': 'SQL с ?'}" value="${v.pattern || v.query || ''}" class="bg-slate-800 px-1 rounded col-span-2">`;
+            params.innerHTML = `<input id="p-pattern" placeholder="${t==='pattern'?'regex': 'SQL с ?'}" value="${v.pattern || v.query || ''}" class="bg-slate-800 px-1 rounded col-span-2">
+              <input id="p-err" placeholder="Сообщение об ошибке (опц)" value="${v.error || ''}" class="bg-slate-800 px-1 rounded col-span-3">`;
           }
         }
       }
@@ -3717,6 +5855,8 @@ async function openFieldEditor(field, onSave, siblingFields = []) {
           if (condEl && v.condition) condEl.value = v.condition;
           if (patEl && v.query) patEl.value = v.query;
         }
+        const errEl = featureArea.querySelector('#p-err');
+        if (errEl && v.error) errEl.value = v.error;
       }, 0);
 
       featureArea.querySelector('#val-apply').onclick = () => {
@@ -3734,14 +5874,26 @@ async function openFieldEditor(field, onSave, siblingFields = []) {
         }
         if (nv.type === 'language') nv.language = get('p-lang');
         if (nv.type === 'pattern') nv.pattern = get('p-pattern');
-        if (nv.type === 'unique') nv.query = get('p-pattern');
+        if (nv.type === 'unique') {
+          nv.query = get('p-pattern');
+          const fs = get('p-fields');
+          if (fs) nv.fields = fs.split(',').map(s => s.trim()).filter(Boolean);
+          else delete nv.fields;
+        }
         if (nv.type === 'custom') {
           nv.condition = get('p-cond');
           nv.query = get('p-pattern');
         }
 
-        const errMsg = prompt('Сообщение при ошибке (опц):', nv.error || '') || '';
-        if (errMsg) nv.error = errMsg; else delete nv.error;
+        const customErr = get('p-err').trim();
+        if (customErr) {
+          nv.error = customErr;
+        } else {
+          delete nv.error;
+        }
+        if (!nv.error && (nv.type === 'unique' || nv.type === 'custom')) {
+          nv.error = 'Ошибка валидации';
+        }
 
         field.validations[idx] = nv;
         featureArea.innerHTML = '';
@@ -3843,28 +5995,34 @@ async function openFieldEditor(field, onSave, siblingFields = []) {
           } else if (t === 'position') {
             params.innerHTML = `<input placeholder="start (1-based)" id="p-start" value="1" class="bg-slate-800 px-1 rounded"> <input placeholder="длина" id="p-len" class="bg-slate-800 px-1 rounded"> <input placeholder="ожидаемое значение" id="p-val" class="bg-slate-800 px-1 rounded">`;
           } else if (t === 'language') {
-              params.innerHTML =
-              `<select id="p-lang" class="bg-slate-800 px-1 rounded col-span-3">
-                  <option value="armenian">armenian</option>
-                  <option value="armenian_alphanumeric">armenian + digits + symbols</option>
-
-                  <option value="latin">latin</option>
-                  <option value="latin_alphanumeric">latin + digits + symbols</option>
-
-                  <option value="cyrillic">cyrillic</option>
-                  <option value="cyrillic_alphanumeric">cyrillic + digits + symbols</option>
-
-                  <option value="digits">digits</option>
-                  <option value="alphanumeric">latin letters + digits</option>
-              </select>`;
+              params.innerHTML = `
+                <select id="p-lang" class="bg-slate-800 px-1 rounded w-full">
+                    <option value="armenian">armenian</option>
+                    <option value="armenian_alphanumeric">armenian + digits + symbols</option>
+                    <option value="latin">latin</option>
+                    <option value="latin_alphanumeric">latin + digits + symbols</option>
+                    <option value="cyrillic">cyrillic</option>
+                    <option value="cyrillic_alphanumeric">cyrillic + digits + symbols</option>
+                    <option value="digits">digits</option>
+                    <option value="alphanumeric">latin letters + digits</option>
+                </select>
+                <input id="p-err" placeholder="Сообщение об ошибке (опц) - your custom text here" class="bg-slate-800 px-1 rounded w-full mt-1">`;
           }else if (t === 'pattern' || t === 'unique' || t === 'custom') {
             if (t === 'custom') {
               params.innerHTML = `
                 <input id="p-cond" placeholder="if условие напр. value > 1" class="bg-slate-800 px-1 rounded">
                 <input id="p-pattern" placeholder="SQL с ? (опц)" class="bg-slate-800 px-1 rounded">
+                <input id="p-err" placeholder="Сообщение об ошибке (обяз.)" class="bg-slate-800 px-1 rounded col-span-3">
+              `;
+            } else if (t === 'unique') {
+              params.innerHTML = `
+                <input id="p-pattern" placeholder="SQL с ? , напр. SELECT 1 FROM t WHERE tid=? AND mid=?" class="bg-slate-800 px-1 rounded col-span-2">
+                <input id="p-fields" placeholder="поля comma: TerminalID,MerchantID" class="bg-slate-800 px-1 rounded">
+                <input id="p-err" placeholder="Сообщение об ошибке (обяз.)" class="bg-slate-800 px-1 rounded col-span-3">
               `;
             } else {
-              params.innerHTML = `<input id="p-pattern" placeholder="${t==='pattern'?'regex': 'SQL с ?'}" class="bg-slate-800 px-1 rounded col-span-2">`;
+              params.innerHTML = `<input id="p-pattern" placeholder="${t==='pattern'?'regex': 'SQL с ?'}" class="bg-slate-800 px-1 rounded col-span-2">
+                <input id="p-err" placeholder="Сообщение об ошибке (опц)" class="bg-slate-800 px-1 rounded col-span-3">`;
             }
           }
         }
@@ -3886,19 +6044,29 @@ async function openFieldEditor(field, onSave, siblingFields = []) {
           }
           if (v.type === 'language') v.language = get('p-lang');
           if (v.type === 'pattern') v.pattern = get('p-pattern');
-          if (v.type === 'unique') v.query = get('p-pattern');
+          if (v.type === 'unique') {
+            v.query = get('p-pattern');
+            const fs = get('p-fields');
+            if (fs) v.fields = fs.split(',').map(s => s.trim()).filter(Boolean);
+            else delete v.fields;
+          }
           if (v.type === 'custom') {
             v.condition = get('p-cond');
             v.query = get('p-pattern');
           }
+          const customErr = get('p-err').trim();
+          if (customErr) {
+            v.error = customErr;
+          } else {
+            delete v.error;
+          }
+          if (!v.error && (v.type === 'unique' || v.type === 'custom')) {
+            v.error = 'Ошибка валидации';
+          }
 
-          (async () => {
-            const errMsg = await customPrompt('Сообщение при ошибке (можно пропустить):', '') || undefined;
-            if (errMsg) v.error = errMsg;
-            field.validations.push(v);
-            featureArea.innerHTML = '';
-            refreshRulesList();
-          })();
+          field.validations.push(v);
+          featureArea.innerHTML = '';
+          refreshRulesList();
         };
 
       } else if (feat === 'conditional') {
@@ -3912,7 +6080,7 @@ async function openFieldEditor(field, onSave, siblingFields = []) {
           </div>`;
         featureArea.querySelector('#c-apply').onclick = () => {
           const f = featureArea.querySelector('#c-field').value;
-          if (!f) return alert('Выберите поле');
+          if (!f) { showToast('Выберите поле', 'error'); return; }
           field.conditional = {
             field: f,
             op: featureArea.querySelector('#c-op').value,
@@ -4060,6 +6228,10 @@ async function openFieldEditor(field, onSave, siblingFields = []) {
 
       field.required = modal.querySelector('#fe-required').checked;
       field.hiddenInForm = modal.querySelector('#fe-hidden').checked;
+      field.disabled = !!modal.querySelector('#fe-disabled')?.checked;
+      if (!field.disabled) delete field.disabled;
+      field.readonly = !!modal.querySelector('#fe-readonly')?.checked;
+      if (!field.readonly) delete field.readonly;
 
       // Checkbox special values
       if (typeSel.value === 'checkbox') {
@@ -4132,20 +6304,59 @@ async function openFieldEditor(field, onSave, siblingFields = []) {
       const lwin = modal.querySelector('#fe-lookup-win');
       const lval = modal.querySelector('#fe-lookup-val');
       const ldisp = modal.querySelector('#fe-lookup-disp');
+      const staticOpt = modal.querySelector('#fe-static-options');
 
-      if (ltype === 'query' || ltype === 'conditional') {
+      if (ltype === 'static' && staticOpt) {
+        const raw = staticOpt.value || '';
+        const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+        field.options = lines.map(line => {
+          if (line.includes('|')) {
+            const [v, d] = line.split('|');
+            return { value: v.trim(), display: d.trim() };
+          }
+          return { value: line, display: line };
+        });
+        delete field.lookupQuery;
+        delete field.lookupWindow;
+        delete field.lookupValueField;
+        delete field.lookupDisplayField;
+        delete field.lookupConditions;
+      } else if (ltype === 'query' || ltype === 'conditional') {
         field.lookupQuery = lq ? lq.value.trim() : undefined;
         if (lval && lval.value) field.lookupValueField = lval.value.trim();
         if (ldisp && ldisp.value) field.lookupDisplayField = ldisp.value.trim();
         delete field.lookupWindow;
+        delete field.options;
+
+        // Collect conditional queries (e.g. if City=Երևան use different table)
+        const condList = modal.querySelector('#fe-cond-list');
+        if (condList) {
+          const conditions = [];
+          condList.querySelectorAll('.flex').forEach(row => {
+            const valInp = row.querySelector('.fe-cond-val');
+            const qInp = row.querySelector('.fe-cond-query');
+            const v = valInp ? valInp.value.trim() : '';
+            const q = qInp ? qInp.value.trim() : '';
+            if (v && q) conditions.push({ value: v, query: q });
+          });
+          if (conditions.length > 0) {
+            field.lookupConditions = conditions;
+          } else {
+            delete field.lookupConditions;
+          }
+        }
       } else if (ltype === 'window') {
         field.lookupWindow = lwin ? lwin.value.trim() : undefined;
         delete field.lookupQuery;
+        delete field.options;
+        delete field.lookupConditions;
       } else {
         delete field.lookupQuery;
         delete field.lookupWindow;
         delete field.lookupValueField;
         delete field.lookupDisplayField;
+        delete field.options;
+        delete field.lookupConditions;
       }
 
       // Cleanup empty
@@ -4211,7 +6422,7 @@ function renderFieldsList() {
     let html = '';
     fields.forEach(function(field, i) {
         html += 
-            '<div class="bg-slate-800 rounded-2xl p-6 border border-slate-700 hover:border-cyan-400 group">' +
+            '<div class="bg-slate-800 rounded-2xl p-6 border border-slate-700 hover:border-blue-400 group">' +
             '<div class="flex justify-between items-start">' +
             '<div>' +
             '<div class="font-semibold">' + (field.title || field.field) + '</div>' +
@@ -4220,7 +6431,7 @@ function renderFieldsList() {
             (field.dependsOn ? '<div class="text-[10px] text-amber-400">зависит от: ' + field.dependsOn + '</div>' : '') +
             '</div>' +
             '<div class="flex gap-2">' +
-            '<button onclick="editField(' + i + ')" class="bg-cyan-900 hover:bg-cyan-700 px-4 py-1.5 rounded-xl text-sm">Редактировать</button>' +
+            '<button onclick="editField(' + i + ')" class="bg-blue-900 hover:bg-blue-700 px-4 py-1.5 rounded-xl text-sm">Редактировать</button>' +
             '<button onclick="deleteField(' + i + ')" class="bg-red-900 hover:bg-red-700 px-4 py-1.5 rounded-xl text-sm">Удалить</button>' +
             '</div>' +
             '</div>' +
@@ -4252,7 +6463,7 @@ async function deleteField(index) {
 
 function editField(index) {
     // stubbed to fix parse error
-    alert('Legacy field editor disabled to fix syntax. Use the main field lists in admin.');
+    showToast('Legacy field editor disabled to fix syntax. Use the main field lists in admin.', 'error');
 }
 
 function closeFieldEditor() {
@@ -4296,17 +6507,19 @@ async function saveFullConfig() {
                     fields: currentWindowConfig.fields || [], // unified master fields to avoid duplication between insert/update
                     details: currentWindowConfig.details,
                     filters: currentWindowConfig.filters,
-                    form: currentWindowConfig.form
+                    form: currentWindowConfig.form,
+                    formCustomButtons: currentWindowConfig.formCustomButtons || [],
+                    rowFormatting: currentWindowConfig.rowFormatting || []
                 };
             }
         }
         const success = await window.electronAPI.saveConfig(fullConfig);
         if (success) {
-            alert('✅ Конфигурация успешно сохранена!');
+            showToast('✅ Конфигурация успешно сохранена!');
             refreshWindowList();
         }
     } catch (e) {
-        alert('Ошибка сохранения: ' + e.message);
+        showToast('Ошибка сохранения: ' + e.message, 'error');
     }
 }
 
@@ -4360,7 +6573,7 @@ function renderRelationButtons() {
             const targetWin = (fullConfig && fullConfig.windows ? fullConfig.windows : []).find(w => 
                 (w.id || w.windowId) == targetId
             );
-            if (!targetWin) return alert('Целевое окно не найдено');
+            if (!targetWin) { showToast('Целевое окно не найдено', 'error'); return; }
 
             pendingFormPrefill = {};
             const fk = rel.childForeignKey || rel.foreignKey;
@@ -4385,7 +6598,7 @@ function saveFormTable() {
     if (currentWindowConfig.insert) {
         currentWindowConfig.insert.table = currentWindowConfig.form.table;
     }
-    alert('Таблица для вставки сохранена в памяти формы. Нажмите «Сохранить config.json» для записи на диск.');
+    showToast('Таблица для вставки сохранена в памяти формы. Нажмите «Сохранить config.json» для записи на диск.');
     renderFieldsList();
     renderAdminRelations();
 }
@@ -4435,7 +6648,7 @@ function addRelationFromForm() {
     const cKey = document.getElementById('new-rel-child')?.value.trim();
 
     if (!target || !pKey || !cKey) {
-        alert('Заполните все поля связи');
+        showToast('Заполните все поля связи', 'error');
         return;
     }
 
@@ -4470,13 +6683,13 @@ async function deleteRelation(i) {
 // ==================== MISSING FUNCTIONALITY ====================
 
 async function deleteSelectedRow() {
-    if (!selectedRow || !currentWindowConfig) return alert('Выберите строку для удаления');
+    if (!selectedRow || !currentWindowConfig) { showToast('Выберите строку для удаления', 'error'); return; }
 
     const del = currentWindowConfig.delete || {};
     const ds = currentWindowConfig.dataSource || {};
     const table = del.table || ds.table;
     let keyField = del.keyField || ds.primaryKey;
-    if (!table || !keyField) return alert('Для удаления в конфиге окна должны быть указаны delete.table + delete.keyField (или dataSource)');
+    if (!table || !keyField) { showToast('Для удаления в конфиге окна должны быть указаны delete.table + delete.keyField (или dataSource)', 'error'); return; }
 
     let pkValue = selectedRow[keyField] ?? selectedRow[keyField.toUpperCase?.()] ?? selectedRow[keyField.toLowerCase?.()];
     if (pkValue === undefined || pkValue === null) {
@@ -4484,7 +6697,7 @@ async function deleteSelectedRow() {
         const firstKey = Object.keys(selectedRow)[0];
         pkValue = selectedRow[firstKey];
         keyField = firstKey;
-        if (pkValue === undefined) return alert('Не удалось определить значение ключа для удаления');
+        if (pkValue === undefined) { showToast('Не удалось определить значение ключа для удаления', 'error'); return; }
     }
 
     if (!(await customConfirm('Удалить запись с ' + keyField + '=' + pkValue + ' ?'))) return;
@@ -4492,11 +6705,11 @@ async function deleteSelectedRow() {
     const sql = 'DELETE FROM ' + table + ' WHERE ' + keyField + ' = ?';
     const res = await window.electronAPI.executeQuery(sql, [pkValue]);
     if (res.success) {
-        alert('🗑️ Запись удалена');
+        showToast('🗑️ Запись удалена');
         selectedRow = null;
         performSearch();
     } else {
-        alert('Ошибка удаления:\n' + res.error);
+        showToast('Ошибка удаления:\n' + res.error, 'error');
     }
 }
 
@@ -4549,23 +6762,23 @@ function toggleConsole() {
 
 // Export helpers using current results
 async function exportCurrentCsv() {
-    if (!currentResults || !currentResults.length) return alert('Нет данных для экспорта');
+    if (!currentResults || !currentResults.length) { showToast('Нет данных для экспорта', 'error'); return; }
     const ts = new Date().toISOString().replace(/[:.]/g, '-');
     const fname = (currentWindowConfig && currentWindowConfig.id || 'data') + '_' + ts + '.csv';
     try {
         const p = await window.electronAPI.exportCsv(currentResults, fname);
-        alert('CSV сохранён: ' + p);
-    } catch (e) { alert('Ошибка экспорта CSV: ' + e.message); }
+        showToast('CSV сохранён: ' + p);
+    } catch (e) { showToast('Ошибка экспорта CSV: ' + e.message, 'error'); }
 }
 
 async function exportCurrentXlsx() {
-    if (!currentResults || !currentResults.length) return alert('Нет данных для экспорта');
+    if (!currentResults || !currentResults.length) { showToast('Нет данных для экспорта', 'error'); return; }
     const ts = new Date().toISOString().replace(/[:.]/g, '-');
     const fname = (currentWindowConfig && currentWindowConfig.id || 'data') + '_' + ts + '.xlsx';
     try {
         const p = await window.electronAPI.exportXlsx(currentResults, fname);
-        alert('XLSX сохранён: ' + p);
-    } catch (e) { alert('Ошибка экспорта XLSX: ' + e.message); }
+        showToast('XLSX сохранён: ' + p);
+    } catch (e) { showToast('Ошибка экспорта XLSX: ' + e.message, 'error'); }
 }
 
 // Make sure everything is attached even if some late error
@@ -4610,6 +6823,15 @@ try {
   if (typeof editFilter === 'function') window.editFilter = editFilter;
   if (typeof deleteFilter === 'function') window.deleteFilter = deleteFilter;
   if (typeof addFieldToInsert === 'function') window.addFieldToInsert = addFieldToInsert;
+  if (typeof renderFormButtonsList === 'function') window.renderFormButtonsList = renderFormButtonsList;
+  if (typeof addFormButton === 'function') window.addFormButton = addFormButton;
+  if (typeof editFormButton === 'function') window.editFormButton = editFormButton;
+  if (typeof deleteFormButton === 'function') window.deleteFormButton = deleteFormButton;
+  if (typeof showButtonEditor === 'function') window.showButtonEditor = showButtonEditor;
+  if (typeof renderFormButtonsList === 'function') window.renderFormButtonsList = renderFormButtonsList;
+  if (typeof addFormButton === 'function') window.addFormButton = addFormButton;
+  if (typeof editFormButton === 'function') window.editFormButton = editFormButton;
+  if (typeof deleteFormButton === 'function') window.deleteFormButton = deleteFormButton;
   if (typeof syncInsertUpdateFields === 'function') window.syncInsertUpdateFields = syncInsertUpdateFields;
   if (typeof renderUnifiedFieldsList === 'function') window.renderUnifiedFieldsList = renderUnifiedFieldsList;
   if (typeof addFieldToUpdate === 'function') window.addFieldToUpdate = addFieldToUpdate;

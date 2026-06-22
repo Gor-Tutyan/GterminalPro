@@ -24,4 +24,10 @@ saveConfig: (config) =>
         'save-config',
         config
     ),
+  getUsers: () => ipcRenderer.invoke('get-users'),
+  saveUser: (user) => ipcRenderer.invoke('save-user', user),
+  deleteUser: (id) => ipcRenderer.invoke('delete-user', id),
+  selectFile: (options) => ipcRenderer.invoke('select-file', options),
+  readExcel: (filePath) => ipcRenderer.invoke('read-excel', filePath),
+  readExcelCell: (filePath, cell) => ipcRenderer.invoke('read-excel-cell', filePath, cell),
 });
