@@ -1,129 +1,2386 @@
 {
   "title": "GTerminalPro",
-  "database": "data/database.db",
+  "database": "D:\\GterminalPro\\data\\database.db",
   "windows": [
     {
-      "id": "merchants",
-	  "windowId": 1,
-      "title": "Мерчанты",
-	    "insert": {
-		  "table": "MERCHANTS",
-		  "fields": [
-			{
-			  "field": "TID",
-			  "title": "TID",
-			  "type": "text"
-			},
-			{
-			  "field": "ISS_",
-			  "title": "ISSUER",
-			  "type": "select",
-			  "lookupQuery": "select distinct(ISS_) from CURR_TRANS "
-			},
-			{
-			  "field": "EMAIL",
-			  "title": "Email",
-			  "type": "text",
-			  "validations": [
-			    {
-			      "type": "required",
-			      "error": "Email обязателен"
-			    },
-			    {
-			      "type": "pattern",
-			      "pattern": "^[^ @]+@[^ @]+\\.[^ @]+$",
-			      "error": "Неверный формат email (пример: user@domain.com)"
-			    }
-			  ]
-			}
-		  ]
-		},
-
-		"update": {
-			"table": "MERCHANTS",
-			"keyField": "TID",
-			"fields": [
-			  {
-				"field": "MID",
-				"title": "MID",
-				"type": "text"
-			  },
-			  {
-				"field": "SERIAL_NUMBER",
-				"title": "SERIAL_NUMBER",
-				"type": "text"
-			  },
-			  {
-				"field": "LEGAL_NAME",
-				"title": "LEGAL_NAME",
-				"type": "text"
-			  }
-			]
-		  },
-
-		"delete": {
-			"table": "MERCHANTS",
-			"keyField": "TID"
-		  },
-      "filters": [],
-      "query": "SELECT TID, MID, SERIAL_NUMBER, LEGAL_NAME, LEGAL_NAME_AM FROM MERCHANTS",
-      "grid": [
-        { "field": "TID", "title": "TIDссс" },
-        { "field": "MID", "title": "MID" },
-        { "field": "SERIAL_NUMBER", "title": "Серийный номер" }
-      ],
-      "details": [
-        { "field": "LEGAL_NAME", "title": "Юридическое название" },
-        { "field": "LEGAL_NAME_AM", "title": "Юридическое название (AM)" },
-        { "field": "TID", "title": "TID" },
-        { "field": "MID", "title": "MID" }
-      ],
-      "formCustomButtons": [
+      "id": "1",
+      "title": "Terminals",
+      "query": "select TerminalID, MerchantID, ZIPCode, MCC, Name, NameAm, LegalName, LegalNameAm, City, Region, RegistrationAddress, RegistrationAddressAm, LocationAddress, LocationAddressAm, INN, TransactionType, BankAccount, TerminalBrand, SerialNumber, TerminalModel, DirectorName, Phone, PartnerBank, LocationClassCB, OperatorClassCB, ArcaFee, LocalFee, InternationalFee, CloseDate, OpenDate, Email from MERCHANTS order by TerminalID desc",
+      "filters": [
         {
-          "label": "Установить константу в MID (демо)",
-          "action": "setFields",
-          "position": "top",
-          "saveAfter": false,
-          "set": [
-            { "field": "MID", "valueType": "constant", "value": "DEMO-123" }
-          ],
-          "style": { "bg": "#16a34a", "color": "#fff", "width": "auto", "height": "auto" }
+          "field": "CloseDate",
+          "title": "Status"
+        }
+      ],
+      "grid": [
+        {
+          "field": "TerminalID",
+          "title": "TerminalID"
         },
         {
-          "label": "NOW + авто-сохранить (демо)",
-          "action": "setFields",
+          "field": "MerchantID",
+          "title": "MerchantID"
+        },
+        {
+          "field": "ZIPCode",
+          "title": "ZIPCode"
+        },
+        {
+          "field": "MCC",
+          "title": "MCC"
+        },
+        {
+          "field": "Name",
+          "title": "Name"
+        },
+        {
+          "field": "NameAm",
+          "title": "NameAm"
+        },
+        {
+          "field": "LegalName",
+          "title": "LegalName"
+        },
+        {
+          "field": "LegalNameAm",
+          "title": "LegalNameAm"
+        },
+        {
+          "field": "City",
+          "title": "City"
+        },
+        {
+          "field": "Region",
+          "title": "Region"
+        }
+      ],
+      "insert": {
+        "table": "MERCHANTS",
+        "fields": [
+          {
+            "field": "TerminalID",
+            "title": "TerminalID",
+            "type": "select",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": true,
+            "hiddenInForm": false,
+            "lookupQuery": "SELECT DISTINCT value_col as value, display_col as display FROM table_name WHERE parent = ?",
+            "systemVariable": "sql:Select max(TerminalID) + 1 from MERCHANTS where substr(TerminalID,1,5) = '41043'",
+            "autoValue": {
+              "type": "sql",
+              "query": "Select max(TerminalID) + 1 from MERCHANTS where substr(TerminalID,1,5) = '41043'"
+            }
+          },
+          {
+            "field": "MerchantID",
+            "title": "MerchantID",
+            "type": "text",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "validations": [
+              {
+                "type": "position",
+                "start": 3,
+                "length": 2,
+                "value": "01",
+                "error": "MerchantID 3-4 նիշը պետք է լինի 01"
+              },
+              {
+                "type": "length",
+                "min": 8,
+                "max": 8,
+                "error": "Պետք է լինի 8 նիշ"
+              }
+            ],
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": true,
+            "hiddenInForm": false
+          },
+          {
+            "field": "ZIPCode",
+            "title": "ZIPCode",
+            "type": "text",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": true,
+            "hiddenInForm": false,
+            "validations": [
+              {
+                "type": "language",
+                "language": "digits",
+                "error": "Պետք է լինի միայն թվեր"
+              }
+            ]
+          },
+          {
+            "field": "MCC",
+            "title": "MCC",
+            "type": "select",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "transforms": [
+              {
+                "type": "firstN",
+                "length": 4
+              }
+            ],
+            "conditionalDefaults": [],
+            "required": true,
+            "hiddenInForm": false,
+            "lookupQuery": "select MCCCode || ' - ' || MCC_DESC from MCC",
+            "searchable": true
+          },
+          {
+            "field": "ArcaFee",
+            "title": "OurFee",
+            "type": "lookup",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": true,
+            "hiddenInForm": false,
+            "dependsOn": "MCC",
+            "lookupQuery": "SELECT OurFee as value, OurFee as display FROM MCC_FEES WHERE substr(?,1,4) = MCCFee",
+            "width": "45px",
+            "height": "28px",
+            "validations": [],
+            "conditional": null
+          },
+          {
+            "field": "LocalFee",
+            "title": "LocalFee",
+            "type": "lookup",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": false,
+            "hiddenInForm": false,
+            "dependsOn": "MCC",
+            "lookupQuery": "SELECT ArcaFee as value, ArcaFee as display FROM MCC_FEES WHERE substr(?,1,4) = MCCFee"
+          },
+          {
+            "field": "InternationalFee",
+            "title": "InternationalFee",
+            "type": "lookup",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": false,
+            "hiddenInForm": false,
+            "dependsOn": "MCC",
+            "lookupQuery": "SELECT InternationalFee as value, InternationalFee as display FROM MCC_FEES WHERE substr(?,1,4) = MCCFee"
+          },
+          {
+            "field": "City",
+            "title": "City",
+            "type": "select",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "transforms": [],
+            "conditionalDefaults": [],
+            "searchable": true,
+            "required": true,
+            "hiddenInForm": false,
+            "lookupQuery": "select CityName from CITIES"
+          },
+          {
+            "field": "Region",
+            "title": "Region",
+            "type": "lookup",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": false,
+            "hiddenInForm": false,
+            "searchable": true,
+            "dependsOn": "City",
+            "lookupQuery": "SELECT DistrictName as value, DistrictName as display FROM DISTRICTS WHERE ? = 'Երևան' UNION ALL SELECT RegionName as value, RegionName as display FROM REGIONS WHERE ? != 'Երևان'"
+          },
+          {
+            "field": "Name",
+            "title": "Name",
+            "type": "text",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "validations": [
+              {
+                "type": "language",
+                "language": "latin_alphanumeric",
+                "error": "Պետք է լինի Անգլերեն"
+              }
+            ],
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": false,
+            "hiddenInForm": false
+          },
+          {
+            "field": "NameAm",
+            "title": "NameAm",
+            "type": "text",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "validations": [
+              {
+                "type": "language",
+                "language": "armenian",
+                "error": "Պետք է լինի Հայերեն"
+              }
+            ],
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": false,
+            "hiddenInForm": false
+          },
+          {
+            "field": "LegalName",
+            "title": "LegalName",
+            "type": "lookup",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": true,
+            "hiddenInForm": false,
+            "validations": [
+              {
+                "type": "language",
+                "language": "latin_alphanumeric",
+                "error": "Պետք է լինի Անգլերեն"
+              }
+            ],
+            "dependsOn": "MerchantID",
+            "lookupQuery": "SELECT DISTINCT(LegalName) as value FROM MERCHANTS WHERE ? = MerchantID"
+          },
+          {
+            "field": "LegalNameAm",
+            "title": "LegalNameAm",
+            "type": "lookup",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "validations": [
+              {
+                "type": "language",
+                "language": "armenian",
+                "error": "Պետք է լինի Հայերեն"
+              }
+            ],
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": false,
+            "hiddenInForm": false,
+            "dependsOn": "MerchantID",
+            "lookupQuery": "SELECT DISTINCT(LegalNameAm) as value FROM MERCHANTS WHERE ? = MerchantID"
+          },
+          {
+            "field": "RegistrationAddress",
+            "title": "RegistrationAddress",
+            "type": "lookup",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": true,
+            "hiddenInForm": false,
+            "validations": [
+              {
+                "type": "language",
+                "language": "latin_alphanumeric",
+                "error": "Պետք է լինի Անգլերեն"
+              }
+            ],
+            "dependsOn": "MerchantID",
+            "lookupQuery": "SELECT DISTINCT(RegistrationAddress) as value FROM MERCHANTS WHERE ? = MerchantID"
+          },
+          {
+            "field": "RegistrationAddressAm",
+            "title": "RegistrationAddressAm",
+            "type": "lookup",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": true,
+            "hiddenInForm": false,
+            "validations": [
+              {
+                "type": "language",
+                "language": "armenian_alphanumeric",
+                "error": "Պետք է լինի Հայերեն"
+              }
+            ],
+            "dependsOn": "MerchantID",
+            "lookupQuery": "SELECT DISTINCT(RegistrationAddressAm) as value FROM MERCHANTS WHERE ? = MerchantID"
+          },
+          {
+            "field": "LocationAddress",
+            "title": "LocationAddress",
+            "type": "text",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "validations": [
+              {
+                "type": "language",
+                "language": "latin_alphanumeric",
+                "error": "Պետք է լինի Անգլերեն"
+              }
+            ],
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": false,
+            "hiddenInForm": false
+          },
+          {
+            "field": "LocationAddressAm",
+            "title": "LocationAddressAm",
+            "type": "text",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "validations": [
+              {
+                "type": "language",
+                "language": "armenian_alphanumeric",
+                "error": "Պետք է լինի Հայերեն"
+              }
+            ],
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": false,
+            "hiddenInForm": false
+          },
+          {
+            "field": "INN",
+            "title": "INN",
+            "type": "lookup",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "validations": [
+              {
+                "type": "length",
+                "min": 12,
+                "max": 12,
+                "error": "Պետք է լինի 12 նիշ"
+              }
+            ],
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": true,
+            "hiddenInForm": false,
+            "dependsOn": "MerchantID",
+            "lookupQuery": "SELECT DISTINCT(INN) as value FROM MERCHANTS WHERE ? = MerchantID",
+            "conditional": null
+          },
+          {
+            "field": "TransactionType",
+            "title": "TransactionType",
+            "type": "select",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": false,
+            "hiddenInForm": false,
+            "options": [
+              {
+                "value": "REFUND",
+                "display": "REFUND"
+              },
+              {
+                "value": "NO REFUND",
+                "display": "NO REFUND"
+              }
+            ]
+          },
+          {
+            "field": "BankAccount",
+            "title": "BankAccount",
+            "type": "lookup",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": false,
+            "hiddenInForm": false,
+            "validations": [
+              {
+                "type": "minmax",
+                "min": 14,
+                "max": 14,
+                "error": "Պետք է լինի 14-նիշ"
+              }
+            ],
+            "dependsOn": "MerchantID",
+            "lookupQuery": "SELECT DISTINCT(BankAccount) as value FROM MERCHANTS WHERE ? = MerchantID"
+          },
+          {
+            "field": "TerminalBrand",
+            "title": "TerminalBrand",
+            "type": "text",
+            "useInInsert": true,
+            "useInUpdate": true
+          },
+          {
+            "field": "SerialNumber",
+            "title": "SerialNumber",
+            "type": "text",
+            "useInInsert": true,
+            "useInUpdate": true
+          },
+          {
+            "field": "TerminalModel",
+            "title": "TerminalModel",
+            "type": "text",
+            "useInInsert": true,
+            "useInUpdate": true
+          },
+          {
+            "field": "DirectorName",
+            "title": "DirectorName",
+            "type": "lookup",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "validations": [
+              {
+                "type": "language",
+                "language": "armenian",
+                "error": "Պետք է լինի Հայերեն"
+              }
+            ],
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": false,
+            "hiddenInForm": false,
+            "dependsOn": "MerchantID",
+            "lookupQuery": "SELECT DISTINCT(DirectorName) as value FROM MERCHANTS WHERE ? = MerchantID"
+          },
+          {
+            "field": "Phone",
+            "title": "Phone",
+            "type": "lookup",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "validations": [
+              {
+                "type": "pattern",
+                "pattern": "^\\+?[0-9\\s\\-()]{7,20}$",
+                "error": "ՊԵտք է համապատասխանի Հեռախոսահամրի ֆոռմատին"
+              }
+            ],
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": false,
+            "hiddenInForm": false,
+            "dependsOn": "MerchantID",
+            "lookupQuery": "SELECT DISTINCT(Phone) as value FROM MERCHANTS WHERE ? = MerchantID"
+          },
+          {
+            "field": "PartnerBank",
+            "title": "PartnerBank",
+            "type": "text",
+            "useInInsert": true,
+            "useInUpdate": true
+          },
+          {
+            "field": "LocationClassCB",
+            "title": "LocationClassCB",
+            "type": "text",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": false,
+            "hiddenInForm": true
+          },
+          {
+            "field": "OperatorClassCB",
+            "title": "OperatorClassCB",
+            "type": "text",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": false,
+            "hiddenInForm": true
+          },
+          {
+            "field": "CloseDate",
+            "title": "CloseDate",
+            "type": "text",
+            "useInInsert": true,
+            "useInUpdate": true
+          },
+          {
+            "field": "OpenDate",
+            "title": "Дата регистрации",
+            "type": "text",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": false,
+            "hiddenInForm": true,
+            "autoValue": {
+              "type": "NOW",
+              "format": "DD/MM/YYYY HH:mm:ss"
+            },
+            "systemVariable": "NOW"
+          },
+          {
+            "field": "Email",
+            "title": "Email",
+            "type": "lookup",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": true,
+            "hiddenInForm": false,
+            "validations": [
+              {
+                "type": "pattern",
+                "pattern": "^[^ @]+@[^ @]+\\.[^ @]+$",
+                "error": "saasdasd"
+              }
+            ],
+            "dependsOn": "MerchantID",
+            "lookupQuery": "SELECT DISTINCT(email) as value FROM MERCHANTS WHERE ? = MerchantID"
+          }
+        ]
+      },
+      "formCustomButtons": [
+        {
+          "label": "Excel Download",
+          "action": "importExcel",
+          "style": {
+            "bg": "#0de711",
+            "color": "#000000",
+            "width": "auto",
+            "height": "auto"
+          },
+          "defaultCellMapping": {
+            "MerchantID": "B2"
+          },
+          "set": [],
           "position": "top",
-          "saveAfter": true,
+          "modes": [
+            "insert"
+          ]
+        },
+        {
+          "label": "Новая кнопка",
+          "action": "setFields",
+          "style": {
+            "bg": "#e70d0d",
+            "color": "#000000",
+            "width": "auto",
+            "height": "auto"
+          },
+          "defaultCellMapping": {},
           "set": [
-            { "field": "MID", "valueType": "now", "format": "DD/MM/YYYY HH:mm:ss" }
+            {
+              "field": "CloseDate",
+              "valueType": "constant",
+              "value": "Closedss"
+            }
           ],
-          "style": { "bg": "#ea580c", "color": "#fff", "width": "auto", "height": "auto" }
+          "modes": [
+            "insert",
+            "update"
+          ],
+          "saveAfter": true,
+          "position": "top"
+        }
+      ],
+      "update": {
+        "table": "MERCHANTS",
+        "keyField": "TerminalID",
+        "fields": [
+          {
+            "field": "TerminalID",
+            "title": "TerminalID",
+            "type": "select",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": true,
+            "hiddenInForm": false,
+            "lookupQuery": "SELECT DISTINCT value_col as value, display_col as display FROM table_name WHERE parent = ?",
+            "systemVariable": "sql:Select max(TerminalID) + 1 from MERCHANTS where substr(TerminalID,1,5) = '41043'",
+            "autoValue": {
+              "type": "sql",
+              "query": "Select max(TerminalID) + 1 from MERCHANTS where substr(TerminalID,1,5) = '41043'"
+            }
+          },
+          {
+            "field": "MerchantID",
+            "title": "MerchantID",
+            "type": "text",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "validations": [
+              {
+                "type": "position",
+                "start": 3,
+                "length": 2,
+                "value": "01",
+                "error": "MerchantID 3-4 նիշը պետք է լինի 01"
+              },
+              {
+                "type": "length",
+                "min": 8,
+                "max": 8,
+                "error": "Պետք է լինի 8 նիշ"
+              }
+            ],
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": true,
+            "hiddenInForm": false
+          },
+          {
+            "field": "ZIPCode",
+            "title": "ZIPCode",
+            "type": "text",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": true,
+            "hiddenInForm": false,
+            "validations": [
+              {
+                "type": "language",
+                "language": "digits",
+                "error": "Պետք է լինի միայն թվեր"
+              }
+            ]
+          },
+          {
+            "field": "MCC",
+            "title": "MCC",
+            "type": "select",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "transforms": [
+              {
+                "type": "firstN",
+                "length": 4
+              }
+            ],
+            "conditionalDefaults": [],
+            "required": true,
+            "hiddenInForm": false,
+            "lookupQuery": "select MCCCode || ' - ' || MCC_DESC from MCC",
+            "searchable": true
+          },
+          {
+            "field": "ArcaFee",
+            "title": "OurFee",
+            "type": "lookup",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": true,
+            "hiddenInForm": false,
+            "dependsOn": "MCC",
+            "lookupQuery": "SELECT OurFee as value, OurFee as display FROM MCC_FEES WHERE substr(?,1,4) = MCCFee",
+            "width": "45px",
+            "height": "28px",
+            "validations": [],
+            "conditional": null
+          },
+          {
+            "field": "LocalFee",
+            "title": "LocalFee",
+            "type": "lookup",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": false,
+            "hiddenInForm": false,
+            "dependsOn": "MCC",
+            "lookupQuery": "SELECT ArcaFee as value, ArcaFee as display FROM MCC_FEES WHERE substr(?,1,4) = MCCFee"
+          },
+          {
+            "field": "InternationalFee",
+            "title": "InternationalFee",
+            "type": "lookup",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": false,
+            "hiddenInForm": false,
+            "dependsOn": "MCC",
+            "lookupQuery": "SELECT InternationalFee as value, InternationalFee as display FROM MCC_FEES WHERE substr(?,1,4) = MCCFee"
+          },
+          {
+            "field": "City",
+            "title": "City",
+            "type": "select",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "transforms": [],
+            "conditionalDefaults": [],
+            "searchable": true,
+            "required": true,
+            "hiddenInForm": false,
+            "lookupQuery": "select CityName from CITIES"
+          },
+          {
+            "field": "Region",
+            "title": "Region",
+            "type": "lookup",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": false,
+            "hiddenInForm": false,
+            "searchable": true,
+            "dependsOn": "City",
+            "lookupQuery": "SELECT DistrictName as value, DistrictName as display FROM DISTRICTS WHERE ? = 'Երևան' UNION ALL SELECT RegionName as value, RegionName as display FROM REGIONS WHERE ? != 'Երևان'"
+          },
+          {
+            "field": "Name",
+            "title": "Name",
+            "type": "text",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "validations": [
+              {
+                "type": "language",
+                "language": "latin_alphanumeric",
+                "error": "Պետք է լինի Անգլերեն"
+              }
+            ],
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": false,
+            "hiddenInForm": false
+          },
+          {
+            "field": "NameAm",
+            "title": "NameAm",
+            "type": "text",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "validations": [
+              {
+                "type": "language",
+                "language": "armenian",
+                "error": "Պետք է լինի Հայերեն"
+              }
+            ],
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": false,
+            "hiddenInForm": false
+          },
+          {
+            "field": "LegalName",
+            "title": "LegalName",
+            "type": "lookup",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": true,
+            "hiddenInForm": false,
+            "validations": [
+              {
+                "type": "language",
+                "language": "latin_alphanumeric",
+                "error": "Պետք է լինի Անգլերեն"
+              }
+            ],
+            "dependsOn": "MerchantID",
+            "lookupQuery": "SELECT DISTINCT(LegalName) as value FROM MERCHANTS WHERE ? = MerchantID"
+          },
+          {
+            "field": "LegalNameAm",
+            "title": "LegalNameAm",
+            "type": "lookup",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "validations": [
+              {
+                "type": "language",
+                "language": "armenian",
+                "error": "Պետք է լինի Հայերեն"
+              }
+            ],
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": false,
+            "hiddenInForm": false,
+            "dependsOn": "MerchantID",
+            "lookupQuery": "SELECT DISTINCT(LegalNameAm) as value FROM MERCHANTS WHERE ? = MerchantID"
+          },
+          {
+            "field": "RegistrationAddress",
+            "title": "RegistrationAddress",
+            "type": "lookup",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": true,
+            "hiddenInForm": false,
+            "validations": [
+              {
+                "type": "language",
+                "language": "latin_alphanumeric",
+                "error": "Պետք է լինի Անգլերեն"
+              }
+            ],
+            "dependsOn": "MerchantID",
+            "lookupQuery": "SELECT DISTINCT(RegistrationAddress) as value FROM MERCHANTS WHERE ? = MerchantID"
+          },
+          {
+            "field": "RegistrationAddressAm",
+            "title": "RegistrationAddressAm",
+            "type": "lookup",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": true,
+            "hiddenInForm": false,
+            "validations": [
+              {
+                "type": "language",
+                "language": "armenian_alphanumeric",
+                "error": "Պետք է լինի Հայերեն"
+              }
+            ],
+            "dependsOn": "MerchantID",
+            "lookupQuery": "SELECT DISTINCT(RegistrationAddressAm) as value FROM MERCHANTS WHERE ? = MerchantID"
+          },
+          {
+            "field": "LocationAddress",
+            "title": "LocationAddress",
+            "type": "text",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "validations": [
+              {
+                "type": "language",
+                "language": "latin_alphanumeric",
+                "error": "Պետք է լինի Անգլերեն"
+              }
+            ],
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": false,
+            "hiddenInForm": false
+          },
+          {
+            "field": "LocationAddressAm",
+            "title": "LocationAddressAm",
+            "type": "text",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "validations": [
+              {
+                "type": "language",
+                "language": "armenian_alphanumeric",
+                "error": "Պետք է լինի Հայերեն"
+              }
+            ],
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": false,
+            "hiddenInForm": false
+          },
+          {
+            "field": "INN",
+            "title": "INN",
+            "type": "lookup",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "validations": [
+              {
+                "type": "length",
+                "min": 12,
+                "max": 12,
+                "error": "Պետք է լինի 12 նիշ"
+              }
+            ],
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": true,
+            "hiddenInForm": false,
+            "dependsOn": "MerchantID",
+            "lookupQuery": "SELECT DISTINCT(INN) as value FROM MERCHANTS WHERE ? = MerchantID",
+            "conditional": null
+          },
+          {
+            "field": "TransactionType",
+            "title": "TransactionType",
+            "type": "select",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": false,
+            "hiddenInForm": false,
+            "options": [
+              {
+                "value": "REFUND",
+                "display": "REFUND"
+              },
+              {
+                "value": "NO REFUND",
+                "display": "NO REFUND"
+              }
+            ]
+          },
+          {
+            "field": "BankAccount",
+            "title": "BankAccount",
+            "type": "lookup",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": false,
+            "hiddenInForm": false,
+            "validations": [
+              {
+                "type": "minmax",
+                "min": 14,
+                "max": 14,
+                "error": "Պետք է լինի 14-նիշ"
+              }
+            ],
+            "dependsOn": "MerchantID",
+            "lookupQuery": "SELECT DISTINCT(BankAccount) as value FROM MERCHANTS WHERE ? = MerchantID"
+          },
+          {
+            "field": "TerminalBrand",
+            "title": "TerminalBrand",
+            "type": "text",
+            "useInInsert": true,
+            "useInUpdate": true
+          },
+          {
+            "field": "SerialNumber",
+            "title": "SerialNumber",
+            "type": "text",
+            "useInInsert": true,
+            "useInUpdate": true
+          },
+          {
+            "field": "TerminalModel",
+            "title": "TerminalModel",
+            "type": "text",
+            "useInInsert": true,
+            "useInUpdate": true
+          },
+          {
+            "field": "DirectorName",
+            "title": "DirectorName",
+            "type": "lookup",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "validations": [
+              {
+                "type": "language",
+                "language": "armenian",
+                "error": "Պետք է լինի Հայերեն"
+              }
+            ],
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": false,
+            "hiddenInForm": false,
+            "dependsOn": "MerchantID",
+            "lookupQuery": "SELECT DISTINCT(DirectorName) as value FROM MERCHANTS WHERE ? = MerchantID"
+          },
+          {
+            "field": "Phone",
+            "title": "Phone",
+            "type": "lookup",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "validations": [
+              {
+                "type": "pattern",
+                "pattern": "^\\+?[0-9\\s\\-()]{7,20}$",
+                "error": "ՊԵտք է համապատասխանի Հեռախոսահամրի ֆոռմատին"
+              }
+            ],
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": false,
+            "hiddenInForm": false,
+            "dependsOn": "MerchantID",
+            "lookupQuery": "SELECT DISTINCT(Phone) as value FROM MERCHANTS WHERE ? = MerchantID"
+          },
+          {
+            "field": "PartnerBank",
+            "title": "PartnerBank",
+            "type": "text",
+            "useInInsert": true,
+            "useInUpdate": true
+          },
+          {
+            "field": "LocationClassCB",
+            "title": "LocationClassCB",
+            "type": "text",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": false,
+            "hiddenInForm": true
+          },
+          {
+            "field": "OperatorClassCB",
+            "title": "OperatorClassCB",
+            "type": "text",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": false,
+            "hiddenInForm": true
+          },
+          {
+            "field": "CloseDate",
+            "title": "CloseDate",
+            "type": "text",
+            "useInInsert": true,
+            "useInUpdate": true
+          },
+          {
+            "field": "OpenDate",
+            "title": "Дата регистрации",
+            "type": "text",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": false,
+            "hiddenInForm": true,
+            "autoValue": {
+              "type": "NOW",
+              "format": "DD/MM/YYYY HH:mm:ss"
+            },
+            "systemVariable": "NOW"
+          },
+          {
+            "field": "Email",
+            "title": "Email",
+            "type": "lookup",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": true,
+            "hiddenInForm": false,
+            "validations": [
+              {
+                "type": "pattern",
+                "pattern": "^[^ @]+@[^ @]+\\.[^ @]+$",
+                "error": "saasdasd"
+              }
+            ],
+            "dependsOn": "MerchantID",
+            "lookupQuery": "SELECT DISTINCT(email) as value FROM MERCHANTS WHERE ? = MerchantID"
+          }
+        ]
+      },
+      "delete": {
+        "table": "MERCHANTS",
+        "keyField": "TerminalID"
+      },
+      "details": [
+        {
+          "field": "TerminalID",
+          "title": "TerminalID"
+        },
+        {
+          "field": "MerchantID",
+          "title": "MerchantID"
+        },
+        {
+          "field": "ZIPCode",
+          "title": "ZIPCode"
+        },
+        {
+          "field": "MCC",
+          "title": "MCC"
+        },
+        {
+          "field": "Name",
+          "title": "Name"
+        },
+        {
+          "field": "NameAm",
+          "title": "NameAm"
+        },
+        {
+          "field": "LegalName",
+          "title": "LegalName"
+        },
+        {
+          "field": "LegalNameAm",
+          "title": "LegalNameAm"
+        },
+        {
+          "field": "City",
+          "title": "City"
+        },
+        {
+          "field": "Region",
+          "title": "Region"
+        },
+        {
+          "field": "RegistrationAddress",
+          "title": "RegistrationAddress"
+        },
+        {
+          "field": "RegistrationAddressAm",
+          "title": "RegistrationAddressAm"
+        },
+        {
+          "field": "LocationAddress",
+          "title": "LocationAddress"
+        },
+        {
+          "field": "LocationAddressAm",
+          "title": "LocationAddressAm"
+        },
+        {
+          "field": "INN",
+          "title": "INN"
+        },
+        {
+          "field": "TransactionType",
+          "title": "TransactionType"
+        },
+        {
+          "field": "BankAccount",
+          "title": "BankAccount"
+        },
+        {
+          "field": "TerminalBrand",
+          "title": "TerminalBrand"
+        },
+        {
+          "field": "SerialNumber",
+          "title": "SerialNumber"
+        },
+        {
+          "field": "TerminalModel",
+          "title": "TerminalModel"
+        },
+        {
+          "field": "DirectorName",
+          "title": "DirectorName"
+        },
+        {
+          "field": "Phone",
+          "title": "Phone"
+        },
+        {
+          "field": "PartnerBank",
+          "title": "PartnerBank"
+        },
+        {
+          "field": "LocationClassCB",
+          "title": "LocationClassCB"
+        },
+        {
+          "field": "OperatorClassCB",
+          "title": "OperatorClassCB"
+        },
+        {
+          "field": "ArcaFee",
+          "title": "ArcaFee"
+        },
+        {
+          "field": "LocalFee",
+          "title": "LocalFee"
+        },
+        {
+          "field": "InternationalFee",
+          "title": "InternationalFee"
+        },
+        {
+          "field": "CloseDate",
+          "title": "CloseDate"
+        },
+        {
+          "field": "OpenDate",
+          "title": "Дата регистрации",
+          "type": "text",
+          "useInInsert": true,
+          "useInUpdate": true,
+          "transforms": [],
+          "conditionalDefaults": [],
+          "required": false,
+          "hiddenInForm": true,
+          "autoValue": {
+            "type": "NOW",
+            "format": "DD/MM/YYYY HH:mm:ss"
+          },
+          "systemVariable": "NOW"
+        },
+        {
+          "field": "Email",
+          "title": "Email"
+        }
+      ],
+      "dataSource": {
+        "query": "select TerminalID, MerchantID, ZIPCode, MCC, Name, NameAm, LegalName, LegalNameAm, City, Region, RegistrationAddress, RegistrationAddressAm, LocationAddress, LocationAddressAm, INN, TransactionType, BankAccount, TerminalBrand, SerialNumber, TerminalModel, DirectorName, Phone, PartnerBank, LocationClassCB, OperatorClassCB, ArcaFee, LocalFee, InternationalFee, CloseDate, OpenDate, Email from MERCHANTS order by TerminalID desc",
+        "table": "MERCHANTS",
+        "primaryKey": "TerminalID"
+      },
+      "fields": [
+        {
+          "field": "TerminalID",
+          "title": "TerminalID",
+          "type": "select",
+          "useInInsert": true,
+          "useInUpdate": true,
+          "transforms": [],
+          "conditionalDefaults": [],
+          "required": true,
+          "hiddenInForm": false,
+          "lookupQuery": "SELECT DISTINCT value_col as value, display_col as display FROM table_name WHERE parent = ?",
+          "systemVariable": "sql:Select max(TerminalID) + 1 from MERCHANTS where substr(TerminalID,1,5) = '41043'",
+          "autoValue": {
+            "type": "sql",
+            "query": "Select max(TerminalID) + 1 from MERCHANTS where substr(TerminalID,1,5) = '41043'"
+          }
+        },
+        {
+          "field": "MerchantID",
+          "title": "MerchantID",
+          "type": "text",
+          "useInInsert": true,
+          "useInUpdate": true,
+          "validations": [
+            {
+              "type": "position",
+              "start": 3,
+              "length": 2,
+              "value": "01",
+              "error": "MerchantID 3-4 նիշը պետք է լինի 01"
+            },
+            {
+              "type": "length",
+              "min": 8,
+              "max": 8,
+              "error": "Պետք է լինի 8 նիշ"
+            }
+          ],
+          "transforms": [],
+          "conditionalDefaults": [],
+          "required": true,
+          "hiddenInForm": false
+        },
+        {
+          "field": "ZIPCode",
+          "title": "ZIPCode",
+          "type": "text",
+          "useInInsert": true,
+          "useInUpdate": true,
+          "transforms": [],
+          "conditionalDefaults": [],
+          "required": true,
+          "hiddenInForm": false,
+          "validations": [
+            {
+              "type": "language",
+              "language": "digits",
+              "error": "Պետք է լինի միայն թվեր"
+            }
+          ]
+        },
+        {
+          "field": "MCC",
+          "title": "MCC",
+          "type": "select",
+          "useInInsert": true,
+          "useInUpdate": true,
+          "transforms": [
+            {
+              "type": "firstN",
+              "length": 4
+            }
+          ],
+          "conditionalDefaults": [],
+          "required": true,
+          "hiddenInForm": false,
+          "lookupQuery": "select MCCCode || ' - ' || MCC_DESC from MCC",
+          "searchable": true
+        },
+        {
+          "field": "ArcaFee",
+          "title": "OurFee",
+          "type": "lookup",
+          "useInInsert": true,
+          "useInUpdate": true,
+          "transforms": [],
+          "conditionalDefaults": [],
+          "required": true,
+          "hiddenInForm": false,
+          "dependsOn": "MCC",
+          "lookupQuery": "SELECT OurFee as value, OurFee as display FROM MCC_FEES WHERE substr(?,1,4) = MCCFee",
+          "width": "45px",
+          "height": "28px",
+          "validations": [],
+          "conditional": null
+        },
+        {
+          "field": "LocalFee",
+          "title": "LocalFee",
+          "type": "lookup",
+          "useInInsert": true,
+          "useInUpdate": true,
+          "transforms": [],
+          "conditionalDefaults": [],
+          "required": false,
+          "hiddenInForm": false,
+          "dependsOn": "MCC",
+          "lookupQuery": "SELECT ArcaFee as value, ArcaFee as display FROM MCC_FEES WHERE substr(?,1,4) = MCCFee"
+        },
+        {
+          "field": "InternationalFee",
+          "title": "InternationalFee",
+          "type": "lookup",
+          "useInInsert": true,
+          "useInUpdate": true,
+          "transforms": [],
+          "conditionalDefaults": [],
+          "required": false,
+          "hiddenInForm": false,
+          "dependsOn": "MCC",
+          "lookupQuery": "SELECT InternationalFee as value, InternationalFee as display FROM MCC_FEES WHERE substr(?,1,4) = MCCFee"
+        },
+        {
+          "field": "City",
+          "title": "City",
+          "type": "select",
+          "useInInsert": true,
+          "useInUpdate": true,
+          "transforms": [],
+          "conditionalDefaults": [],
+          "searchable": true,
+          "required": true,
+          "hiddenInForm": false,
+          "lookupQuery": "select CityName from CITIES"
+        },
+        {
+          "field": "Region",
+          "title": "Region",
+          "type": "lookup",
+          "useInInsert": true,
+          "useInUpdate": true,
+          "transforms": [],
+          "conditionalDefaults": [],
+          "required": false,
+          "hiddenInForm": false,
+          "searchable": true,
+          "dependsOn": "City",
+          "lookupQuery": "SELECT DistrictName as value, DistrictName as display FROM DISTRICTS WHERE ? = 'Երևան' UNION ALL SELECT RegionName as value, RegionName as display FROM REGIONS WHERE ? != 'Երևان'"
+        },
+        {
+          "field": "Name",
+          "title": "Name",
+          "type": "text",
+          "useInInsert": true,
+          "useInUpdate": true,
+          "validations": [
+            {
+              "type": "language",
+              "language": "latin_alphanumeric",
+              "error": "Պետք է լինի Անգլերեն"
+            }
+          ],
+          "transforms": [],
+          "conditionalDefaults": [],
+          "required": false,
+          "hiddenInForm": false
+        },
+        {
+          "field": "NameAm",
+          "title": "NameAm",
+          "type": "text",
+          "useInInsert": true,
+          "useInUpdate": true,
+          "validations": [
+            {
+              "type": "language",
+              "language": "armenian",
+              "error": "Պետք է լինի Հայերեն"
+            }
+          ],
+          "transforms": [],
+          "conditionalDefaults": [],
+          "required": false,
+          "hiddenInForm": false
+        },
+        {
+          "field": "LegalName",
+          "title": "LegalName",
+          "type": "lookup",
+          "useInInsert": true,
+          "useInUpdate": true,
+          "transforms": [],
+          "conditionalDefaults": [],
+          "required": true,
+          "hiddenInForm": false,
+          "validations": [
+            {
+              "type": "language",
+              "language": "latin_alphanumeric",
+              "error": "Պետք է լինի Անգլերեն"
+            }
+          ],
+          "dependsOn": "MerchantID",
+          "lookupQuery": "SELECT DISTINCT(LegalName) as value FROM MERCHANTS WHERE ? = MerchantID"
+        },
+        {
+          "field": "LegalNameAm",
+          "title": "LegalNameAm",
+          "type": "lookup",
+          "useInInsert": true,
+          "useInUpdate": true,
+          "validations": [
+            {
+              "type": "language",
+              "language": "armenian",
+              "error": "Պետք է լինի Հայերեն"
+            }
+          ],
+          "transforms": [],
+          "conditionalDefaults": [],
+          "required": false,
+          "hiddenInForm": false,
+          "dependsOn": "MerchantID",
+          "lookupQuery": "SELECT DISTINCT(LegalNameAm) as value FROM MERCHANTS WHERE ? = MerchantID"
+        },
+        {
+          "field": "RegistrationAddress",
+          "title": "RegistrationAddress",
+          "type": "lookup",
+          "useInInsert": true,
+          "useInUpdate": true,
+          "transforms": [],
+          "conditionalDefaults": [],
+          "required": true,
+          "hiddenInForm": false,
+          "validations": [
+            {
+              "type": "language",
+              "language": "latin_alphanumeric",
+              "error": "Պետք է լինի Անգլերեն"
+            }
+          ],
+          "dependsOn": "MerchantID",
+          "lookupQuery": "SELECT DISTINCT(RegistrationAddress) as value FROM MERCHANTS WHERE ? = MerchantID"
+        },
+        {
+          "field": "RegistrationAddressAm",
+          "title": "RegistrationAddressAm",
+          "type": "lookup",
+          "useInInsert": true,
+          "useInUpdate": true,
+          "transforms": [],
+          "conditionalDefaults": [],
+          "required": true,
+          "hiddenInForm": false,
+          "validations": [
+            {
+              "type": "language",
+              "language": "armenian_alphanumeric",
+              "error": "Պետք է լինի Հայերեն"
+            }
+          ],
+          "dependsOn": "MerchantID",
+          "lookupQuery": "SELECT DISTINCT(RegistrationAddressAm) as value FROM MERCHANTS WHERE ? = MerchantID"
+        },
+        {
+          "field": "LocationAddress",
+          "title": "LocationAddress",
+          "type": "text",
+          "useInInsert": true,
+          "useInUpdate": true,
+          "validations": [
+            {
+              "type": "language",
+              "language": "latin_alphanumeric",
+              "error": "Պետք է լինի Անգլերեն"
+            }
+          ],
+          "transforms": [],
+          "conditionalDefaults": [],
+          "required": false,
+          "hiddenInForm": false
+        },
+        {
+          "field": "LocationAddressAm",
+          "title": "LocationAddressAm",
+          "type": "text",
+          "useInInsert": true,
+          "useInUpdate": true,
+          "validations": [
+            {
+              "type": "language",
+              "language": "armenian_alphanumeric",
+              "error": "Պետք է լինի Հայերեն"
+            }
+          ],
+          "transforms": [],
+          "conditionalDefaults": [],
+          "required": false,
+          "hiddenInForm": false
+        },
+        {
+          "field": "INN",
+          "title": "INN",
+          "type": "lookup",
+          "useInInsert": true,
+          "useInUpdate": true,
+          "validations": [
+            {
+              "type": "length",
+              "min": 12,
+              "max": 12,
+              "error": "Պետք է լինի 12 նիշ"
+            }
+          ],
+          "transforms": [],
+          "conditionalDefaults": [],
+          "required": true,
+          "hiddenInForm": false,
+          "dependsOn": "MerchantID",
+          "lookupQuery": "SELECT DISTINCT(INN) as value FROM MERCHANTS WHERE ? = MerchantID",
+          "conditional": null
+        },
+        {
+          "field": "TransactionType",
+          "title": "TransactionType",
+          "type": "select",
+          "useInInsert": true,
+          "useInUpdate": true,
+          "transforms": [],
+          "conditionalDefaults": [],
+          "required": false,
+          "hiddenInForm": false,
+          "options": [
+            {
+              "value": "REFUND",
+              "display": "REFUND"
+            },
+            {
+              "value": "NO REFUND",
+              "display": "NO REFUND"
+            }
+          ]
+        },
+        {
+          "field": "BankAccount",
+          "title": "BankAccount",
+          "type": "lookup",
+          "useInInsert": true,
+          "useInUpdate": true,
+          "transforms": [],
+          "conditionalDefaults": [],
+          "required": false,
+          "hiddenInForm": false,
+          "validations": [
+            {
+              "type": "minmax",
+              "min": 14,
+              "max": 14,
+              "error": "Պետք է լինի 14-նիշ"
+            }
+          ],
+          "dependsOn": "MerchantID",
+          "lookupQuery": "SELECT DISTINCT(BankAccount) as value FROM MERCHANTS WHERE ? = MerchantID"
+        },
+        {
+          "field": "TerminalBrand",
+          "title": "TerminalBrand",
+          "type": "text",
+          "useInInsert": true,
+          "useInUpdate": true
+        },
+        {
+          "field": "SerialNumber",
+          "title": "SerialNumber",
+          "type": "text",
+          "useInInsert": true,
+          "useInUpdate": true
+        },
+        {
+          "field": "TerminalModel",
+          "title": "TerminalModel",
+          "type": "text",
+          "useInInsert": true,
+          "useInUpdate": true
+        },
+        {
+          "field": "DirectorName",
+          "title": "DirectorName",
+          "type": "lookup",
+          "useInInsert": true,
+          "useInUpdate": true,
+          "validations": [
+            {
+              "type": "language",
+              "language": "armenian",
+              "error": "Պետք է լինի Հայերեն"
+            }
+          ],
+          "transforms": [],
+          "conditionalDefaults": [],
+          "required": false,
+          "hiddenInForm": false,
+          "dependsOn": "MerchantID",
+          "lookupQuery": "SELECT DISTINCT(DirectorName) as value FROM MERCHANTS WHERE ? = MerchantID"
+        },
+        {
+          "field": "Phone",
+          "title": "Phone",
+          "type": "lookup",
+          "useInInsert": true,
+          "useInUpdate": true,
+          "validations": [
+            {
+              "type": "pattern",
+              "pattern": "^\\+?[0-9\\s\\-()]{7,20}$",
+              "error": "ՊԵտք է համապատասխանի Հեռախոսահամրի ֆոռմատին"
+            }
+          ],
+          "transforms": [],
+          "conditionalDefaults": [],
+          "required": false,
+          "hiddenInForm": false,
+          "dependsOn": "MerchantID",
+          "lookupQuery": "SELECT DISTINCT(Phone) as value FROM MERCHANTS WHERE ? = MerchantID"
+        },
+        {
+          "field": "PartnerBank",
+          "title": "PartnerBank",
+          "type": "text",
+          "useInInsert": true,
+          "useInUpdate": true
+        },
+        {
+          "field": "LocationClassCB",
+          "title": "LocationClassCB",
+          "type": "text",
+          "useInInsert": true,
+          "useInUpdate": true,
+          "transforms": [],
+          "conditionalDefaults": [],
+          "required": false,
+          "hiddenInForm": true
+        },
+        {
+          "field": "OperatorClassCB",
+          "title": "OperatorClassCB",
+          "type": "text",
+          "useInInsert": true,
+          "useInUpdate": true,
+          "transforms": [],
+          "conditionalDefaults": [],
+          "required": false,
+          "hiddenInForm": true
+        },
+        {
+          "field": "CloseDate",
+          "title": "CloseDate",
+          "type": "text",
+          "useInInsert": true,
+          "useInUpdate": true
+        },
+        {
+          "field": "OpenDate",
+          "title": "Дата регистрации",
+          "type": "text",
+          "useInInsert": true,
+          "useInUpdate": true,
+          "transforms": [],
+          "conditionalDefaults": [],
+          "required": false,
+          "hiddenInForm": true,
+          "autoValue": {
+            "type": "NOW",
+            "format": "DD/MM/YYYY HH:mm:ss"
+          },
+          "systemVariable": "NOW"
+        },
+        {
+          "field": "Email",
+          "title": "Email",
+          "type": "lookup",
+          "useInInsert": true,
+          "useInUpdate": true,
+          "transforms": [],
+          "conditionalDefaults": [],
+          "required": true,
+          "hiddenInForm": false,
+          "validations": [
+            {
+              "type": "pattern",
+              "pattern": "^[^ @]+@[^ @]+\\.[^ @]+$",
+              "error": "saasdasd"
+            }
+          ],
+          "dependsOn": "MerchantID",
+          "lookupQuery": "SELECT DISTINCT(email) as value FROM MERCHANTS WHERE ? = MerchantID"
+        }
+      ],
+      "form": {
+        "title": "Terminals",
+        "table": "MERCHANTS",
+        "fields": [
+          {
+            "field": "TerminalID",
+            "title": "TerminalID",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "MerchantID",
+            "title": "MerchantID",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "ZIPCode",
+            "title": "ZIPCode",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "MCC",
+            "title": "MCC",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "Name",
+            "title": "Name",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "NameAm",
+            "title": "NameAm",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "LegalName",
+            "title": "LegalName",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "LegalNameAm",
+            "title": "LegalNameAm",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "City",
+            "title": "City",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "Region",
+            "title": "Region",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "RegistrationAddress",
+            "title": "RegistrationAddress",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "RegistrationAddressAm",
+            "title": "RegistrationAddressAm",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "LocationAddress",
+            "title": "LocationAddress",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "LocationAddressAm",
+            "title": "LocationAddressAm",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "INN",
+            "title": "INN",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "TransactionType",
+            "title": "TransactionType",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "BankAccount",
+            "title": "BankAccount",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "TerminalBrand",
+            "title": "TerminalBrand",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "SerialNumber",
+            "title": "SerialNumber",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "TerminalModel",
+            "title": "TerminalModel",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "DirectorName",
+            "title": "DirectorName",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "Phone",
+            "title": "Phone",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "PartnerBank",
+            "title": "PartnerBank",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "LocationClassCB",
+            "title": "LocationClassCB",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "OperatorClassCB",
+            "title": "OperatorClassCB",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "ArcaFee",
+            "title": "ArcaFee",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "LocalFee",
+            "title": "LocalFee",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "InternationalFee",
+            "title": "InternationalFee",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "CloseDate",
+            "title": "CloseDate",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "OpenDate",
+            "title": "Дата регистрации",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "Email",
+            "title": "Email",
+            "type": "text",
+            "required": false
+          }
+        ]
+      },
+      "rowFormatting": [
+        {
+          "field": "CloseDate",
+          "operator": "notEmpty",
+          "value": "",
+          "style": {
+            "border": "2px solid #dc2626",
+            "backgroundColor": "#040609",
+            "color": "#7f1d1d"
+          },
+          "enabled": true
         }
       ]
     },
     {
-      "id": "transactions",
-	  "windowId": 2,
-      "title": "Транзакции",
+      "id": "2",
+      "title": "Transactions",
+      "query": "select POS_MERCHANT_ID,POS_TERMINAL_ID,ADDRESS,CARD_NUMBER,TR_AMOUNT,TR_CURRENCY,TR_DATE,TR_TIME,TR_TYPE,TR_REVERSAL,TR_AUTHCODE,TR_UTRNNO,TR_N,TR_SV_RESP,POS_DATA_CODE,ISS_,ACQ_,REFNUM,SV_TRACE,FILE_ID  from CURR_TRANS",
       "filters": [
-        { "field": "POS_TERMINAL_ID", "title": "POS_TERMINAL_ID" },
-        { "field": "POS_MERCHANT_ID", "title": "POS Merchant ID" },
-        { "field": "CARD_NUMBER", "title": "Номер карты" }
+        {
+          "field": "CARD_NUMBER",
+          "title": "Քարտի Համար"
+        }
       ],
-      "query": "SELECT POS_TERMINAL_ID, POS_MERCHANT_ID, CARD_NUMBER, TR_AMOUNT, TR_CURRENCY, TR_UTRNNO, TR_DATE, TR_TYPE, TR_SV_RESP, REFNUM, SV_TRACE FROM CURR_TRANS",
       "grid": [
-        { "field": "POS_TERMINAL_ID", "title": "POS Terminal ID" },
-        { "field": "POS_MERCHANT_ID", "title": "POS Merchant ID" },
-        { "field": "CARD_NUMBER", "title": "Номер карты" },
-        { "field": "TR_AMOUNT", "title": "Сумма" },
-        { "field": "TR_CURRENCY", "title": "Валюта" }
+        {
+          "field": "POS_MERCHANT_ID",
+          "title": "POS_MERCHANT_ID"
+        },
+        {
+          "field": "POS_TERMINAL_ID",
+          "title": "POS_TERMINAL_ID"
+        },
+        {
+          "field": "ADDRESS",
+          "title": "ADDRESS"
+        },
+        {
+          "field": "CARD_NUMBER",
+          "title": "CARD_NUMBER"
+        },
+        {
+          "field": "TR_AMOUNT",
+          "title": "TR_AMOUNT"
+        },
+        {
+          "field": "TR_CURRENCY",
+          "title": "TR_CURRENCY"
+        },
+        {
+          "field": "TR_DATE",
+          "title": "TR_DATE"
+        },
+        {
+          "field": "TR_TIME",
+          "title": "TR_TIME"
+        },
+        {
+          "field": "TR_TYPE",
+          "title": "TR_TYPE"
+        },
+        {
+          "field": "TR_REVERSAL",
+          "title": "TR_REVERSAL"
+        }
       ],
+      "insert": {
+        "table": "CURR_TRANS",
+        "fields": []
+      },
+      "update": {
+        "table": "CURR_TRANS",
+        "keyField": "",
+        "fields": []
+      },
+      "delete": {
+        "table": "CURR_TRANS",
+        "keyField": ""
+      },
       "details": [
-        { "field": "TR_TYPE", "title": "Тип транзакции" },
-        { "field": "TR_SV_RESP", "title": "Ответ системы" },
-        { "field": "REFNUM", "title": "Ref Number" },
-        { "field": "SV_TRACE", "title": "SV Trace" }
-      ]
+        {
+          "field": "POS_MERCHANT_ID",
+          "title": "POS_MERCHANT_ID"
+        },
+        {
+          "field": "POS_TERMINAL_ID",
+          "title": "POS_TERMINAL_ID"
+        },
+        {
+          "field": "ADDRESS",
+          "title": "ADDRESS"
+        },
+        {
+          "field": "CARD_NUMBER",
+          "title": "CARD_NUMBER"
+        },
+        {
+          "field": "TR_AMOUNT",
+          "title": "TR_AMOUNT"
+        },
+        {
+          "field": "TR_CURRENCY",
+          "title": "TR_CURRENCY"
+        },
+        {
+          "field": "TR_DATE",
+          "title": "TR_DATE"
+        },
+        {
+          "field": "TR_TIME",
+          "title": "TR_TIME"
+        },
+        {
+          "field": "TR_TYPE",
+          "title": "TR_TYPE"
+        },
+        {
+          "field": "TR_REVERSAL",
+          "title": "TR_REVERSAL"
+        },
+        {
+          "field": "TR_AUTHCODE",
+          "title": "TR_AUTHCODE"
+        },
+        {
+          "field": "TR_UTRNNO",
+          "title": "TR_UTRNNO"
+        },
+        {
+          "field": "TR_N",
+          "title": "TR_N"
+        },
+        {
+          "field": "TR_SV_RESP",
+          "title": "TR_SV_RESP"
+        },
+        {
+          "field": "POS_DATA_CODE",
+          "title": "POS_DATA_CODE"
+        },
+        {
+          "field": "ISS_",
+          "title": "ISS_"
+        },
+        {
+          "field": "ACQ_",
+          "title": "ACQ_"
+        },
+        {
+          "field": "REFNUM",
+          "title": "REFNUM"
+        },
+        {
+          "field": "SV_TRACE",
+          "title": "SV_TRACE"
+        },
+        {
+          "field": "FILE_ID",
+          "title": "FILE_ID"
+        }
+      ],
+      "dataSource": {
+        "query": "select POS_MERCHANT_ID,POS_TERMINAL_ID,ADDRESS,CARD_NUMBER,TR_AMOUNT,TR_CURRENCY,TR_DATE,TR_TIME,TR_TYPE,TR_REVERSAL,TR_AUTHCODE,TR_UTRNNO,TR_N,TR_SV_RESP,POS_DATA_CODE,ISS_,ACQ_,REFNUM,SV_TRACE,FILE_ID  from CURR_TRANS",
+        "table": "CURR_TRANS"
+      },
+      "fields": [],
+      "form": {
+        "title": "Transactions",
+        "table": "CURR_TRANS",
+        "fields": [
+          {
+            "field": "POS_MERCHANT_ID",
+            "title": "POS_MERCHANT_ID",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "POS_TERMINAL_ID",
+            "title": "POS_TERMINAL_ID",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "ADDRESS",
+            "title": "ADDRESS",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "CARD_NUMBER",
+            "title": "CARD_NUMBER",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "TR_AMOUNT",
+            "title": "TR_AMOUNT",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "TR_CURRENCY",
+            "title": "TR_CURRENCY",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "TR_DATE",
+            "title": "TR_DATE",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "TR_TIME",
+            "title": "TR_TIME",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "TR_TYPE",
+            "title": "TR_TYPE",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "TR_REVERSAL",
+            "title": "TR_REVERSAL",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "TR_AUTHCODE",
+            "title": "TR_AUTHCODE",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "TR_UTRNNO",
+            "title": "TR_UTRNNO",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "TR_N",
+            "title": "TR_N",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "TR_SV_RESP",
+            "title": "TR_SV_RESP",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "POS_DATA_CODE",
+            "title": "POS_DATA_CODE",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "ISS_",
+            "title": "ISS_",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "ACQ_",
+            "title": "ACQ_",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "REFNUM",
+            "title": "REFNUM",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "SV_TRACE",
+            "title": "SV_TRACE",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "FILE_ID",
+            "title": "FILE_ID",
+            "type": "text",
+            "required": false
+          }
+        ]
+      },
+      "formCustomButtons": [],
+      "rowFormatting": []
+    },
+    {
+      "id": "3",
+      "title": "MCC",
+      "query": "select MCCCode,MCC_DESC from MCC",
+      "filters": [],
+      "grid": [
+        {
+          "field": "MCCCode",
+          "title": "MCCCode"
+        },
+        {
+          "field": "MCC_DESC",
+          "title": "MCC_DESC"
+        }
+      ],
+      "insert": {
+        "table": "MCC",
+        "fields": [
+          {
+            "field": "MCCCode",
+            "title": "MCCCode",
+            "type": "text",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "validations": [
+              {
+                "type": "length",
+                "min": 4,
+                "max": 4,
+                "error": "Պետք է Լինի 4 Նիշ"
+              }
+            ],
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": true,
+            "hiddenInForm": false
+          },
+          {
+            "field": "MCC_DESC",
+            "title": "MCC_DESC",
+            "type": "text",
+            "useInInsert": true,
+            "useInUpdate": true
+          }
+        ]
+      },
+      "update": {
+        "table": "MCC",
+        "keyField": "",
+        "fields": [
+          {
+            "field": "MCCCode",
+            "title": "MCCCode",
+            "type": "text",
+            "useInInsert": true,
+            "useInUpdate": true,
+            "validations": [
+              {
+                "type": "length",
+                "min": 4,
+                "max": 4,
+                "error": "Պետք է Լինի 4 Նիշ"
+              }
+            ],
+            "transforms": [],
+            "conditionalDefaults": [],
+            "required": true,
+            "hiddenInForm": false
+          },
+          {
+            "field": "MCC_DESC",
+            "title": "MCC_DESC",
+            "type": "text",
+            "useInInsert": true,
+            "useInUpdate": true
+          }
+        ]
+      },
+      "delete": {
+        "table": "MCC",
+        "keyField": ""
+      },
+      "details": [
+        {
+          "field": "MCCCode",
+          "title": "MCCCode"
+        },
+        {
+          "field": "MCC_DESC",
+          "title": "MCC_DESC"
+        }
+      ],
+      "dataSource": {
+        "query": "select MCCCode,MCC_DESC from MCC",
+        "table": "MCC"
+      },
+      "fields": [
+        {
+          "field": "MCCCode",
+          "title": "MCCCode",
+          "type": "text",
+          "useInInsert": true,
+          "useInUpdate": true,
+          "validations": [
+            {
+              "type": "length",
+              "min": 4,
+              "max": 4,
+              "error": "Պետք է Լինի 4 Նիշ"
+            }
+          ],
+          "transforms": [],
+          "conditionalDefaults": [],
+          "required": true,
+          "hiddenInForm": false
+        },
+        {
+          "field": "MCC_DESC",
+          "title": "MCC_DESC",
+          "type": "text",
+          "useInInsert": true,
+          "useInUpdate": true
+        }
+      ],
+      "form": {
+        "title": "MCC",
+        "table": "MCC",
+        "fields": [
+          {
+            "field": "MCCCode",
+            "title": "MCCCode",
+            "type": "text",
+            "required": false
+          },
+          {
+            "field": "MCC_DESC",
+            "title": "MCC_DESC",
+            "type": "text",
+            "required": false
+          }
+        ]
+      }
     }
   ]
 }
