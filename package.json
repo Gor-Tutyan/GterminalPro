@@ -3,24 +3,39 @@
   "version": "1.0.0",
   "description": "Универсальный GUI для SQLite",
   "main": "main.js",
-  "author": "Your Name",
+  "author": "Gor Tutyan",
   "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder --win portable --config.win.sign=false --config.win.forceCodeSigning=false",
-    "build:portable": "set \"CSC_IDENTITY_AUTO_DISCOVERY=false\" && electron-builder --win portable --config.win.sign=false --config.win.forceCodeSigning=false"
+    "clean:dist": "rimraf dist && rimraf \"dist/*.7z\" 2>nul || echo cleaned",
+    "build": "npm run clean:dist && electron-builder --win portable --config.win.target=portable && rimraf \"dist/win-unpacked\" \"dist/*.7z\" 2>nul || echo done",
+    "build:portable": "set \"CSC_IDENTITY_AUTO_DISCOVERY=false\" && npm run clean:dist && electron-builder --win portable --config.win.target=portable && rimraf \"dist/win-unpacked\" \"dist/*.7z\" 2>nul || echo done"
   },
   "build": {
     "appId": "com.gterminalpro.app",
     "productName": "GTerminalPro",
     "win": {
-      "target": "portable",
-      "icon": "icon.ico",
-      "sign": false,
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "signAndEditExecutable": false,
       "forceCodeSigning": false,
       "publisherName": null
     },
+    "portable": {
+      "artifactName": "GTerminalPro.exe",
+      "useZip": false
+    },
     "asar": true,
+    "asarUnpack": [
+      "node_modules/better-sqlite3"
+    ],
+    "npmRebuild": true,
     "compression": "maximum",
     "files": [
       "main.js",
@@ -32,8 +47,11 @@
       "styles.css",
       "package.json",
       "config/**/*",
+      "logo.png",
+      "logo.*",
       "node_modules/**/*",
       "!node_modules/**/{test,tests,examples,docs,*.md,*.markdown,CHANGELOG*,LICENSE*,*.map,*.ts,*.tsx,*.flow,*.nyc_output,.git,.github,.travis.yml,.appveyor.yml,.eslintignore,.eslintrc,.editorconfig,.nycrc,.nyc_output,.gitignore,.gitattributes,.npmignore,.jshintrc,.jshintignore,.idea,.vscode,.sublime-project,.sublime-workspace}",
+      "!node_modules/better-sqlite3/{deps,src,test,tools,build/Debug,build/*.map,*.{md,ts,js.map}}",
       "!**/{.git,.github,.vscode,.idea,*.md,CHANGELOG*,LICENSE*,*.map,*.ts,*.flow,*.nyc_output}",
       "!exports/**",
       "!dist/**",
@@ -47,7 +65,8 @@
     "directories": {
       "output": "dist"
     },
-    "afterSign": null
+    "extraFiles": [],
+    "extraResources": []
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
@@ -57,6 +76,7 @@
   },
   "devDependencies": {
     "electron": "^30.0.0",
-    "electron-builder": "^24.13.3"
+    "electron-builder": "^24.13.3",
+    "rimraf": "^5.0.5"
   }
 }

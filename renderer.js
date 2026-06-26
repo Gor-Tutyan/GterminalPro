@@ -1,5 +1,6 @@
 let currentWindowConfig = null;
 let currentResults = [];
+let currentWindowSearched = false;
 let dbReady = false;
 let currentPage = 1;
 let currentUser = null;
@@ -7,6 +8,25 @@ let inactivityTimeout = null;
 const ROWS_PER_PAGE = 21;
 let selectedRow = null;
 let fullConfig = null;
+
+// Global error logging to catch everything
+window.addEventListener('error', (e) => {
+  console.error('[GLOBAL ERROR]', e.message, e.error ? e.error.stack : '', 'at', e.filename, e.lineno);
+});
+window.addEventListener('unhandledrejection', (e) => {
+  console.error('[UNHANDLED PROMISE REJECTION]', e.reason);
+});
+console.log('[RENDERER] renderer.js loaded, global error handlers installed');
+
+function forceUpdateDbLabel() {
+  const dbLabel = document.getElementById('db-label');
+  if (!dbLabel) return;
+  const dbPath = (fullConfig && fullConfig.database) ? String(fullConfig.database) : '';
+  const display = dbPath ? String(dbPath).split(/[/\\]/).pop() : '';
+  dbLabel.textContent = display;
+  dbLabel.title = dbPath || 'database from C:\\GTerminalPro\\config.json';
+  console.log('[FORCE] db-label updated to:', display || '(empty)', 'from', dbPath);
+}
 
 let masterContext = null;        // { windowId, keyField, value }
 
@@ -17,6 +37,33 @@ function toggleSidebar() {
   localStorage.setItem('sidebarCollapsed', sidebarCollapsed);
   updateSidebarState();
 }
+
+// Make sure it is available globally immediately (for any early clicks and old inline handlers)
+window.toggleSidebar = toggleSidebar;
+
+// Super early attachment for the top bar buttons (runs as soon as DOM is ready)
+(function wireTopBarEarly(){
+  function attach() {
+    const t = document.getElementById('top-toggle-btn');
+    if (t && !t.__gtermWired) {
+      t.__gtermWired = true;
+      t.onclick = function(e){ e.preventDefault(); if (typeof toggleSidebar === 'function') toggleSidebar(); };
+    }
+    const r = document.getElementById('reload-btn');
+    if (r && !r.__gtermWired) {
+      r.__gtermWired = true;
+      r.onclick = function(e){ e.preventDefault(); if (typeof reloadCurrentWindow === 'function') reloadCurrentWindow(); };
+    }
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', attach, { once: true });
+  } else {
+    attach();
+  }
+  // safety retries
+  setTimeout(attach, 50);
+  setTimeout(attach, 300);
+})();
 
 function updateSidebarState() {
   const sidebar = document.querySelector('.sidebar');
@@ -42,6 +89,93 @@ function updateSidebarState() {
 }
 let pendingFormPrefill = null;   // { fieldName: value, ... } for pre-filling inserts from master selection
 let filtersVisible = false;
+
+const FILTER_OPERATOR_CATALOG = {
+    LIKE: { label: 'содержит', needsValue: true },
+    '=': { label: '= равно', needsValue: true },
+    '!=': { label: '!= не равно', needsValue: true },
+    '>': { label: '> больше', needsValue: true },
+    '>=': { label: '>= больше/равно', needsValue: true },
+    '<': { label: '< меньше', needsValue: true },
+    '<=': { label: '<= меньше/равно', needsValue: true },
+    IN: { label: 'IN список', needsValue: true },
+    'NOT LIKE': { label: 'не содержит', needsValue: true },
+    'IS NULL': { label: 'пусто (IS NULL)', needsValue: false },
+    'IS NOT NULL': { label: 'не пусто (IS NOT NULL)', needsValue: false }
+};
+
+const DEFAULT_FILTER_OPERATORS = ['LIKE', '=', '!=', '>', '>=', '<', '<=', 'IN', 'NOT LIKE'];
+
+function getFilterOperatorOptions(filter) {
+    const options = [];
+    const enabledStd = Array.isArray(filter.operators)
+        ? filter.operators
+        : DEFAULT_FILTER_OPERATORS;
+
+    enabledStd.forEach(opKey => {
+        const def = FILTER_OPERATOR_CATALOG[opKey];
+        if (def) {
+            options.push({
+                value: opKey,
+                label: def.label,
+                needsValue: def.needsValue !== false,
+                type: 'standard'
+            });
+        }
+    });
+
+    (filter.customOperators || []).forEach((custom, index) => {
+        if (!custom || !custom.label) return;
+        options.push({
+            value: '__custom__:' + index,
+            label: custom.label,
+            needsValue: !!custom.needsValue,
+            type: 'custom',
+            sql: custom.sql || '',
+            customIndex: index
+        });
+    });
+
+    return options;
+}
+
+function resolveFilterDefaultOperatorValue(filter, options) {
+    const desired = filter.defaultOperator;
+    if (!desired) return options[0] ? options[0].value : 'LIKE';
+    const byValue = options.find(o => o.value === desired);
+    if (byValue) return byValue.value;
+    const byLabel = options.find(o => String(o.label).toLowerCase() === String(desired).toLowerCase());
+    if (byLabel) return byLabel.value;
+    const customIdx = (filter.customOperators || []).findIndex(c => c && String(c.label).toLowerCase() === String(desired).toLowerCase());
+    if (customIdx >= 0) return '__custom__:' + customIdx;
+    return options[0] ? options[0].value : 'LIKE';
+}
+
+function syncFilterValueInput(filter, opEl, valEl) {
+    if (!opEl || !valEl) return;
+    const selected = getFilterOperatorOptions(filter).find(o => o.value === opEl.value);
+    const needsValue = selected ? !!selected.needsValue : true;
+    valEl.disabled = !needsValue;
+    valEl.style.opacity = needsValue ? '1' : '0.45';
+    valEl.placeholder = needsValue ? 'значение...' : 'не требуется';
+    if (!needsValue) valEl.value = '';
+}
+
+function applyCustomFilterSql(sql, fieldName, rawVal) {
+    let clause = String(sql || '').trim();
+    if (!clause) return { clause: '', params: [] };
+    clause = clause.replace(/\{field\}/gi, fieldName);
+    const params = [];
+    const placeholderCount = (clause.match(/\?/g) || []).length;
+    if (placeholderCount > 0) {
+        if (!rawVal) return { clause: '', params: [] };
+        params.push(...new Array(placeholderCount).fill(rawVal));
+    } else if (/\{value\}/i.test(clause)) {
+        if (!rawVal) return { clause: '', params: [] };
+        clause = clause.replace(/\{value\}/gi, rawVal);
+    }
+    return { clause: '(' + clause + ')', params };
+}
 let currentDrop = null;
 let currentInputEl = null;
 
@@ -142,12 +276,23 @@ function normalizeWindowConfig(win) {
         normalized.relations = Array.isArray(win.relations) ? win.relations : (win.relations || []);
     }
 
-    // Ensure filters are simple {field, title} (operators chosen live in the window)
     if (Array.isArray(normalized.filters)) {
-        normalized.filters = normalized.filters.map(f => ({
-            field: f.field,
-            title: f.title || f.field
-        }));
+        normalized.filters = normalized.filters.map(f => {
+            const out = {
+                field: f.field,
+                title: f.title || f.field
+            };
+            if (Array.isArray(f.operators) && f.operators.length) out.operators = f.operators.slice();
+            if (Array.isArray(f.customOperators) && f.customOperators.length) {
+                out.customOperators = f.customOperators.map(c => ({
+                    label: c.label || '',
+                    sql: c.sql || '',
+                    needsValue: !!c.needsValue
+                }));
+            }
+            if (f.defaultOperator) out.defaultOperator = f.defaultOperator;
+            return out;
+        });
     }
 
     // details for detail window (same shape as grid: [{field, title}])
@@ -232,7 +377,17 @@ function updateLogo() {
     const logo = document.getElementById('app-logo');
     const container = document.getElementById('logo-container');
     if (logo && icon && container) {
-        logo.src = fullConfig.logo;
+        let logoPath = fullConfig.logo;
+        if (logoPath && !logoPath.startsWith('file:') && !logoPath.startsWith('data:')) {
+            if (logoPath.includes('/') || logoPath.includes('\\')) {
+                // absolute or relative path -> file URL
+                logoPath = 'file:///' + logoPath.replace(/\\/g, '/');
+            } else {
+                // bare filename like "logo.png" -> bundled in asar, use as-is
+                // (will resolve relative to the loaded html in asar)
+            }
+        }
+        logo.src = logoPath;
         logo.style.display = 'block';
         icon.style.display = 'none';
         container.style.background = 'transparent';
@@ -241,12 +396,25 @@ function updateLogo() {
 }
 
 async function init() {
+    console.log('[INIT] === INIT BODY START (will run fully now) ===');
+
     const user = JSON.parse(localStorage.getItem('currentUser'));
+    console.log('[INIT] localStorage currentUser:', user);
     if (!user) {
-        window.location.href = 'login.html';
+        console.log('[INIT] no user in localStorage, redirecting to login');
+        if (window.electronAPI && window.electronAPI.navigateTo) {
+          window.electronAPI.navigateTo('login');
+        } else {
+          window.location.href = 'login.html';
+        }
         return;
     }
     currentUser = user;
+    console.log('[INIT] currentUser set:', { login: currentUser.login || currentUser.LOGIN, role: currentUser.role || currentUser.ROLE, windowsAccess: currentUser.windowsAccess });
+
+    // Force expanded sidebar (user reports not seeing windows list)
+    sidebarCollapsed = false;
+    localStorage.setItem('sidebarCollapsed', 'false');
 
     // Set dynamic login display early
     const userSpan = document.getElementById('current-user');
@@ -259,13 +427,28 @@ async function init() {
       if (inactivityTimeout) clearTimeout(inactivityTimeout);
       localStorage.removeItem('currentUser');
       currentUser = null;
-      window.location.href = 'login.html';
+      // Use main-process navigation for reliable switch back to login in packaged build
+      if (window.electronAPI && window.electronAPI.navigateTo) {
+        window.electronAPI.navigateTo('login');
+      } else {
+        window.location.href = 'login.html';
+      }
     };
 
     const logoutBtn = document.getElementById('logout-btn');
     if (logoutBtn) {
       logoutBtn.onclick = window.logout;
     };
+
+    // Attach top bar handlers (avoids inline onclick + "not defined" + makes CSP easier later)
+    const topToggle = document.getElementById('top-toggle-btn');
+    if (topToggle) {
+      topToggle.onclick = () => { if (typeof toggleSidebar === 'function') toggleSidebar(); };
+    }
+    const reloadBtn = document.getElementById('reload-btn');
+    if (reloadBtn) {
+      reloadBtn.onclick = () => { if (typeof reloadCurrentWindow === 'function') reloadCurrentWindow(); };
+    }
 
     // Inactivity auto-logout after ~1 hour of no clicks/mouse/key
     function resetInactivity() {
@@ -289,19 +472,36 @@ async function init() {
 
     try {
         fullConfig = await window.electronAPI.getConfig();
+        const receivedDb = fullConfig && fullConfig.database;
+        console.log('[INIT] getConfig result - database:', receivedDb, 'windows count:', Array.isArray(fullConfig && fullConfig.windows) ? fullConfig.windows.length : 0);
+        console.log('[INIT] fullConfig.windows raw:', fullConfig && fullConfig.windows ? fullConfig.windows.map(w => ({id: w.id, title: w.title})) : 'none');
         if (!fullConfig) fullConfig = {};
         if (!Array.isArray(fullConfig.windows)) fullConfig.windows = [];
-        document.getElementById('window-title').textContent = fullConfig.title || "GTerminalPro";
 
+        // Force the db-label right away using the value we just received.
+        // This guarantees it overrides the HTML default "main.db".
         const dbLabel = document.getElementById('db-label');
-        if (dbLabel && fullConfig.database) {
-            dbLabel.textContent = fullConfig.database.split(/[/\\]/).pop() || 'database.db';
+        if (dbLabel) {
+            const dbPath = receivedDb || '';
+            const display = dbPath ? String(dbPath).split(/[/\\]/).pop() : '';
+            dbLabel.textContent = display;
+            dbLabel.title = dbPath || 'database not in config';
+            console.log('[INIT] db-label set to:', display || '(empty)', 'full path:', dbPath);
         }
+
+        // Fallback to bundled logo.png (included at build time via package.json "files")
+        // if no logo is set in the C:\GTerminalPro config
+        if (!fullConfig.logo) {
+            fullConfig.logo = 'logo.png';
+        }
+        const titleEl = document.getElementById('window-title');
+        if (titleEl) titleEl.textContent = fullConfig.title || "GTerminalPro";
 
         // Support custom logo from config (e.g. "logo.png" or data URL)
         updateLogo();
 
         if (!fullConfig.windows) fullConfig.windows = [];
+        console.log('[INIT] before refresh: windows in fullConfig =', fullConfig.windows.length, 'currentUser =', currentUser ? currentUser.login : null);
 
         // Use the proper refresh that respects collapsed state + datasets + active highlight
         refreshWindowList();
@@ -311,8 +511,13 @@ async function init() {
         // Main sidebar + button for new windows removed.
         // Proper window creation (with ID + per-window INSERT/UPDATE/DELETE) is done only from Admin.
 
-        const dbResult = await window.electronAPI.openDb();
-        dbReady = dbResult.success;
+        let dbResult = { success: false };
+        try {
+          dbResult = await window.electronAPI.openDb();
+        } catch (_) {}
+        dbReady = !!dbResult.success;
+        console.log('[INIT] openDb result:', dbResult, 'dbReady=', dbReady);
+        forceUpdateDbLabel();
         // update any status indicators
         document.querySelectorAll('.text-emerald-400').forEach(el => {
             if (el.textContent.includes('Подключено') || el.textContent.includes('баз')) {
@@ -323,52 +528,140 @@ async function init() {
         if (fullConfig.windows && fullConfig.windows.length > 0) {
             const allowed = (currentUser && currentUser.windowsAccess) ? String(currentUser.windowsAccess).split(',').map(s=>s.trim()).filter(Boolean) : null;
             let candidates = fullConfig.windows;
-            if (allowed && allowed.length > 0 && currentUser.role !== 'ADMIN') {
+            const roleStr = String(currentUser && (currentUser.role || currentUser.ROLE) || '').toUpperCase();
+            const isAdmin = currentUser && (roleStr === 'ADMIN' || (currentUser.login || currentUser.LOGIN || '').toLowerCase() === 'admin');
+            console.log('[INIT] load first window: isAdmin=', isAdmin, 'allowed=', allowed, 'total windows=', fullConfig.windows.length);
+            if (allowed && allowed.length > 0 && !isAdmin) {
                 candidates = fullConfig.windows.filter(w => allowed.includes(String(w.id || w.windowId || w.title)));
             }
             const firstWin = candidates[0] || fullConfig.windows[0];
+            console.log('[INIT] firstWin to load:', firstWin ? {id: firstWin.id, title: firstWin.title} : null);
             const lw = window.loadWindow || (typeof loadWindow !== 'undefined' ? loadWindow : null);
-            if (lw && firstWin) lw(firstWin); else console.error('loadWindow not available');
+            if (lw && firstWin) {
+              console.log('[INIT] calling loadWindow for firstWin');
+              lw(firstWin);
+            } else {
+              console.error('loadWindow not available');
+              // ensure at least skeleton if first load failed
+              ensureBasicWindowUI();
+            }
+        } else {
+          // no windows configured -> at least show empty but usable main area
+          console.log('[INIT] no windows in config, calling ensureBasic');
+          ensureBasicWindowUI();
         }
+        console.log('[INIT] finished, should have tried to display first window. visible windows should be in sidebar now.');
+        setTimeout(forceUpdateDbLabel, 50);
 
     } catch (e) {
         console.error(e);
+        // still try to show sidebar if possible + a message so UI is never completely blank
+        try { refreshWindowList(); } catch(_) {}
+        try { updateSidebarState(); } catch(_) {}
+        forceUpdateDbLabel();
+        const container = document.getElementById('current-window');
+        if (container) {
+          container.innerHTML = '<div class="p-6 text-slate-400">Не удалось загрузить конфигурацию окон. Проверьте config.json в C:\\GTerminalPro.<br>Ошибка: ' + (e && e.message || e) + '</div>';
+        }
         showToast('Ошибка загрузки: ' + e.message, 'error');
     }
+}
+
+function ensureBasicWindowUI() {
+  // Called when there are no windows or load skipped: put a neutral non-empty state so "окна не пустые"
+  const container = document.getElementById('current-window');
+  if (!container) return;
+  if (container.querySelector('#results-table') || container.querySelector('h2')) return; // already has window UI
+  container.innerHTML = `
+    <div class="h-full flex flex-col">
+      <div class="flex justify-between items-center mb-3 pb-3 border-b border-slate-700">
+        <h2 class="text-xl font-semibold text-slate-100">${(fullConfig && fullConfig.title) || 'GTerminalPro'}</h2>
+        <div class="flex gap-2">
+          <button onclick="performSearch && performSearch()" class="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded-xl text-sm flex items-center gap-2">
+            <i class="fas fa-search"></i> Поиск
+          </button>
+        </div>
+      </div>
+      <div class="bg-slate-800 border border-slate-700 flex flex-col flex-1 min-h-0 overflow-hidden">
+        <div class="px-4 py-2 border-b border-slate-700 bg-slate-800 text-xs font-medium text-slate-400">Результаты <span id="row-count" class="text-blue-400 font-semibold">(0)</span></div>
+        <div class="flex-1 overflow-auto custom-scroll flex items-center justify-center text-slate-500" id="table-scroll-container">
+          <div class="text-center">
+            <i class="fas fa-database text-6xl mb-6 opacity-40"></i>
+            <p class="text-lg">Нет окон в конфиге или нажмите «Поиск»</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 // ==================== ОСНОВНЫЕ ФУНКЦИИ ====================
 
 async function loadWindow(winConfig) {
+    console.log('[LOAD] loadWindow called with:', winConfig ? {id: winConfig.id, title: winConfig.title} : null);
     // Clean up floating admin guide button when leaving admin
     document.querySelectorAll('#admin-floating-guide').forEach(el => el.remove());
 
     try {
         // Normalize config shape to support different config variants (dataSource vs top-level, grid array vs obj, form vs insert/update)
         currentWindowConfig = (window.normalizeWindowConfig || normalizeWindowConfig)(winConfig);
+        console.log('[LOAD] after normalize, currentWindowConfig title=', currentWindowConfig.title);
+
+        // Defensive clean: if insert/update/form have no actual fields, remove them so has* logic and future saves stay clean.
+        // This helps when user manually removes or when old configs have empty objects.
+        if (currentWindowConfig.insert && (!Array.isArray(currentWindowConfig.insert.fields) || currentWindowConfig.insert.fields.length === 0)) {
+          delete currentWindowConfig.insert;
+        }
+        if (currentWindowConfig.update && (!Array.isArray(currentWindowConfig.update.fields) || currentWindowConfig.update.fields.length === 0)) {
+          delete currentWindowConfig.update;
+        }
+        if (currentWindowConfig.form && (!Array.isArray(currentWindowConfig.form.fields) || currentWindowConfig.form.fields.length === 0)) {
+          delete currentWindowConfig.form;
+        }
 
         // DYNAMIC: update top title so user always sees which window is active
         const topTitle = document.getElementById('window-title');
         if (topTitle) {
             topTitle.textContent = currentWindowConfig.title || fullConfig?.title || 'GTerminalPro';
         }
+        forceUpdateDbLabel();
 
         // Rebuild sidebar list with correct active highlight (makes slide/selection feel dynamic and correct)
         if (typeof refreshWindowList === 'function') {
             refreshWindowList();
         }
         currentResults = [];
+        currentWindowSearched = false;
         selectedRow = null;
 
         const container = document.getElementById('current-window');
         const winIdStr = String(currentWindowConfig.id || currentWindowConfig.windowId || currentWindowConfig.title || '');
-        const userInsert = !currentUser || currentUser.role === 'ADMIN' || (currentUser.insertAccess || '').split(',').map(s => s.trim()).includes(winIdStr);
-        const userUpdate = !currentUser || currentUser.role === 'ADMIN' || (currentUser.updateAccess || '').split(',').map(s => s.trim()).includes(winIdStr);
-        const userDelete = !currentUser || currentUser.role === 'ADMIN' || (currentUser.deleteAccess || '').split(',').map(s => s.trim()).includes(winIdStr);
+        const roleStr = String(currentUser && (currentUser.role || currentUser.ROLE) || '').toUpperCase();
+        const isAdmin = currentUser && (roleStr === 'ADMIN' || (currentUser.login || currentUser.LOGIN || '').toLowerCase() === 'admin');
+        const userInsert = !currentUser || isAdmin || (currentUser.insertAccess || '').split(',').map(s => s.trim()).includes(winIdStr);
+        const userUpdate = !currentUser || isAdmin || (currentUser.updateAccess || '').split(',').map(s => s.trim()).includes(winIdStr);
+        const userDelete = !currentUser || isAdmin || (currentUser.deleteAccess || '').split(',').map(s => s.trim()).includes(winIdStr);
 
-        const hasInsert = !!(currentWindowConfig.insert || currentWindowConfig.form);
-        const hasUpdate = !!(currentWindowConfig.update || currentWindowConfig.form);
-        const hasDelete = !!(currentWindowConfig.delete || currentWindowConfig.dataSource?.primaryKey);
+        // Determine CRUD capability strictly from explicit sections (insert/update/delete)
+        // Do NOT fall back to normalized .form here, because normalize creates .form from insert/update
+        // and that was causing false-positive buttons (e.g. only insert defined → "Изменить" wrongly appeared).
+        const insertFields = (currentWindowConfig.insert && Array.isArray(currentWindowConfig.insert.fields)) ? currentWindowConfig.insert.fields : [];
+        const updateFields = (currentWindowConfig.update && Array.isArray(currentWindowConfig.update.fields)) ? currentWindowConfig.update.fields : [];
+        let hasInsert = insertFields.length > 0;
+        let hasUpdate = updateFields.length > 0;
+
+        // Pure "form" style (no insert/update keys) as fallback
+        if (!hasInsert && !hasUpdate) {
+          const formFields = (currentWindowConfig.form && Array.isArray(currentWindowConfig.form.fields)) ? currentWindowConfig.form.fields : [];
+          if (formFields.length > 0) {
+            hasInsert = true;
+            hasUpdate = true;
+          }
+        }
+
+        const delObj = currentWindowConfig.delete || {};
+        const dsPk = currentWindowConfig.dataSource ? currentWindowConfig.dataSource.primaryKey : null;
+        const hasDelete = !!((delObj.keyField && String(delObj.keyField).trim()) || (dsPk && String(dsPk).trim()));
 
         const canInsert = hasInsert && userInsert;
         const canUpdate = hasUpdate && userUpdate;
@@ -404,6 +697,7 @@ async function loadWindow(winConfig) {
                     <button id="btn-filters" onclick="toggleFilters()" class="bg-purple-700 hover:bg-purple-600 px-3 py-2 rounded-lg text-xs flex items-center gap-1" style="display:none">
                         <i class="fas fa-filter"></i> Фильтры
                     </button>
+                    <span id="grid-custom-buttons" class="flex gap-2 ml-1"></span>
                     <span id="relation-buttons" class="flex gap-2 ml-1"></span>`;
 
         container.innerHTML = 
@@ -414,8 +708,6 @@ async function loadWindow(winConfig) {
                     toolbarButtons +
                 '</div>' +
             '</div>' +
-
-
             '<div id="filters-container" class="hidden bg-slate-800 p-5 rounded-3xl mb-6">' +
                 '<div class="flex items-center justify-between mb-2">' +
                     '<span class="text-xs text-violet-300 font-medium">Фильтры: выбери оператор + значение → нажми «Поиск»</span>' +
@@ -435,7 +727,7 @@ async function loadWindow(winConfig) {
                     '<div id="empty-state" class="h-full flex items-center justify-center text-slate-500 py-20">' +
                         '<div class="text-center">' +
                             '<i class="fas fa-database text-6xl mb-6 opacity-40"></i>' +
-                            '<p class="text-lg">Нажмите кнопку «Поиск»</p>' +
+                            '<p class="text-lg">Нажмите «Поиск» для загрузки данных</p>' +
                         '</div>' +
                     '</div>' +
                 '</div>' +
@@ -443,6 +735,8 @@ async function loadWindow(winConfig) {
                 '<div id="pager-container" class="flex items-center gap-1 px-3 py-1.5 border-t border-slate-700 bg-slate-900 text-xs flex-shrink-0 min-h-[32px]"></div>' +
             '</div>' +
         '</div>';
+
+        console.log('[LOAD] after innerHTML set for', currentWindowConfig.title, 'container now has', container.children.length, 'direct children');
 
         const hasFilters = (currentWindowConfig.filters || []).length > 0;
         const filtersCont = document.getElementById('filters-container');
@@ -459,7 +753,7 @@ async function loadWindow(winConfig) {
 
         renderFilters(currentWindowConfig);
         renderRelationButtons();
-        // master context banner removed per user request
+        if (typeof renderGridCustomButtons === 'function') renderGridCustomButtons();
 
         // Initially disable update/delete until a row is selected (only if buttons exist)
         const btnUpdate = document.getElementById('btn-update');
@@ -467,17 +761,12 @@ async function loadWindow(winConfig) {
         if (btnUpdate) btnUpdate.disabled = true;
         if (btnDelete) btnDelete.disabled = true;
 
-        // NOTE: NO auto performSearch — user must click "Поиск" manually to load data.
-        // Only auto for master-detail context when relevant.
+        // Show empty grid headers without loading data — user must click «Поиск».
         setTimeout(() => {
-            if (masterContext) {
-                const rels = currentWindowConfig.relations || [];
-                const hasMatchingRel = rels.some(r => r.type === 'master-detail' && (r.targetId || r.targetWindow) == masterContext.windowId);
-                if (hasMatchingRel) {
-                    performSearch();
-                }
-            }
-        }, 120);
+            try {
+                if (typeof renderTable === 'function') renderTable();
+            } catch (e) { /* ignore if db not ready yet */ }
+        }, 0);
     } catch (e) {
         console.error('Error in loadWindow:', e);
         const container = document.getElementById('current-window');
@@ -487,21 +776,33 @@ async function loadWindow(winConfig) {
 
 function renderFilters(winConfig) {
     const div = document.getElementById('filters');
+    if (!div) return;
     const filters = winConfig.filters || [];
     let html = '';
     filters.forEach(f => {
         const title = f.title || f.field;
+        const options = getFilterOperatorOptions(f);
+        const defaultOp = resolveFilterDefaultOperatorValue(f, options);
         html += '<div class="flex flex-col min-w-[170px]"><label class="text-[10px] text-slate-400 mb-0.5">' + title + '</label><div class="flex gap-1 items-center">';
-        html += '<select id="fop-' + f.field + '" class="bg-slate-900 border border-slate-600 rounded-lg px-1 py-1 text-[10px] min-w-[52px]">';
-        html += '<option value="LIKE">содержит</option><option value="=">= равно</option><option value="!=">!= не равно</option>';
-        html += '<option value=">">&gt; больше</option><option value=">=">&gt;= больше/равно</option>';
-        html += '<option value="<">&lt; меньше</option><option value="<=">&lt;= меньше/равно</option>';
-        html += '<option value="IN">IN список</option><option value="NOT LIKE">не содержит</option>';
+        html += '<select id="fop-' + f.field + '" class="bg-slate-900 border border-slate-600 rounded-lg px-1 py-1 text-[10px] min-w-[88px]">';
+        options.forEach(op => {
+            const selected = op.value === defaultOp ? ' selected' : '';
+            html += '<option value="' + op.value + '"' + selected + '>' + op.label + '</option>';
+        });
         html += '</select>';
         html += '<input type="text" id="fval-' + f.field + '" class="flex-1 bg-slate-700 border border-slate-600 rounded-lg px-2 py-1 text-sm focus:border-blue-500" placeholder="значение...">';
         html += '</div></div>';
     });
     div.innerHTML = html;
+
+    filters.forEach(f => {
+        const opEl = document.getElementById('fop-' + f.field);
+        const valEl = document.getElementById('fval-' + f.field);
+        if (!opEl || !valEl) return;
+        const sync = () => syncFilterValueInput(f, opEl, valEl);
+        opEl.addEventListener('change', sync);
+        sync();
+    });
 }
 
 function toggleFilters() {
@@ -532,9 +833,24 @@ function injectWhere(baseSql, whereStr) {
 }
 
 async function performSearch() {
-    if (!currentWindowConfig || !dbReady) {
-        // silent for initial auto-load (db opens slightly after first window render)
-        if (dbReady === false) console.warn('DB not ready yet for search');
+    console.log('[SEARCH] performSearch called, dbReady=', dbReady, 'currentWindowConfig=', currentWindowConfig ? currentWindowConfig.title : null);
+    if (!currentWindowConfig) return;
+
+    if (!dbReady) {
+        const container = document.getElementById('table-scroll-container') || document.getElementById('current-window');
+        if (container) {
+            container.innerHTML = `
+                <div class="flex items-center justify-center h-full p-8">
+                    <div class="text-center text-red-400">
+                        <i class="fas fa-exclamation-triangle text-4xl mb-4"></i>
+                        <p class="text-lg">База данных не открыта</p>
+                        <p class="text-sm mt-2 text-slate-400">Проверьте поле "database" в C:\\GTerminalPro\\config.json<br>и что файл БД существует.</p>
+                        <button onclick="location.reload()" class="mt-4 px-3 py-1 bg-red-600 rounded text-xs">Перезагрузить</button>
+                    </div>
+                </div>
+            `;
+        }
+        console.warn('DB not ready for search. fullConfig.database =', fullConfig && fullConfig.database);
         return;
     }
 
@@ -557,21 +873,42 @@ async function performSearch() {
         const valEl = document.getElementById('fval-' + filter.field);
         if (!valEl) return;
 
-        const rawVal = valEl.value.trim();
-        if (!rawVal) return;
-
         const fieldName = filter.field;
+        const options = getFilterOperatorOptions(filter);
+        const selectedOp = options.find(o => o.value === (opEl ? opEl.value : ''))
+            || options[0]
+            || { value: 'LIKE', type: 'standard', needsValue: true };
 
-        // Operator is chosen LIVE in the window (select), fallback to config default
-        let opRaw = opEl ? opEl.value.trim().toUpperCase() : (filter.operator || 'LIKE').toUpperCase();
+        const rawVal = valEl.value.trim();
+        if (selectedOp.needsValue && !rawVal) return;
 
-        // Normalize common aliases
+        if (selectedOp.type === 'custom') {
+            const custom = (filter.customOperators || [])[selectedOp.customIndex];
+            if (!custom || !custom.sql) return;
+            const applied = applyCustomFilterSql(custom.sql, fieldName, rawVal);
+            if (applied.clause) {
+                where.push(applied.clause);
+                params.push(...applied.params);
+            }
+            return;
+        }
+
+        let opRaw = String(selectedOp.value || 'LIKE').trim().toUpperCase();
         if (opRaw === '==') opRaw = '=';
         if (opRaw === '<>') opRaw = '!=';
         if (opRaw === 'CONTAINS') opRaw = 'LIKE';
 
         let clause = '';
         let pval = rawVal;
+
+        if (opRaw === 'IS NULL') {
+            where.push(fieldName + ' IS NULL');
+            return;
+        }
+        if (opRaw === 'IS NOT NULL') {
+            where.push(fieldName + ' IS NOT NULL');
+            return;
+        }
 
         if (opRaw === 'LIKE') {
             clause = fieldName + ' LIKE ?';
@@ -586,7 +923,7 @@ async function performSearch() {
                 clause = fieldName + ' IN (' + ph + ')';
                 params.push(...vals);
                 where.push(clause);
-                return; // already pushed
+                return;
             }
         } else if (['=', '!=', '>', '>=', '<', '<='].includes(opRaw)) {
             clause = fieldName + ' ' + opRaw + ' ?';
@@ -628,19 +965,21 @@ async function performSearch() {
     const lim = currentWindowConfig.dataSource?.limit || currentWindowConfig.limit;
     if (lim && !/limit\s+\d+/i.test(sql)) sql += ' LIMIT ' + lim;
 
+    currentWindowSearched = true;
     const result = await window.electronAPI.executeQuery(sql, params);
     if (result.success) {
         currentResults = result.rows || [];
         currentPage = 1;
         renderTable();
         renderRelationButtons();
-        // master context banner removed per user request
+        if (typeof renderGridCustomButtons === 'function') renderGridCustomButtons();
     } else {
         showToast('Ошибка:\n' + result.error, 'error');
     }
 }
 
 function renderTable() {
+    console.log('[RENDER] renderTable called with', currentResults ? currentResults.length : 0, 'rows');
     const table = document.getElementById('results-table');
     const empty = document.getElementById('empty-state');
     const header = document.getElementById('table-header');
@@ -654,17 +993,6 @@ function renderTable() {
 
     count.textContent = '(' + currentResults.length + ')';
 
-    if (currentResults.length === 0) {
-        table.classList.add('hidden');
-        empty.classList.remove('hidden');
-        return;
-    }
-
-    table.classList.remove('hidden');
-    empty.classList.add('hidden');
-    header.innerHTML = '';
-    tbody.innerHTML = '';
-
     let gridDef = currentWindowConfig.grid || [];
     let columns = Array.isArray(gridDef) ? gridDef : (gridDef.columns || []);
 
@@ -674,12 +1002,37 @@ function renderTable() {
         columns = keys.slice(0, 10).map(k => ({ field: k, title: k }));
     }
 
+    // Always render headers for the window to "open" visually
+    header.innerHTML = '';
+    tbody.innerHTML = '';
+
     columns.forEach(col => {
         const th = document.createElement('th');
         th.className = "px-4 py-3 text-left text-xs font-medium text-blue-300 border-b border-slate-700";
         th.textContent = (col && (col.title || col.field)) || '';
         header.appendChild(th);
     });
+
+    if (currentResults.length === 0) {
+        table.classList.remove('hidden');
+        empty.classList.add('hidden');
+
+        // no data row
+        const tr = document.createElement('tr');
+        tr.className = "border-b border-slate-700";
+        const td = document.createElement('td');
+        td.colSpan = Math.max(1, columns.length);
+        td.className = "px-4 py-2 text-sm text-center text-slate-500";
+        td.textContent = currentWindowSearched ? 'Нет записей' : 'Нажмите «Поиск» для загрузки данных';
+        tr.appendChild(td);
+        tbody.appendChild(tr);
+
+        renderPagination(0, ROWS_PER_PAGE || 21);
+        return;
+    }
+
+    table.classList.remove('hidden');
+    empty.classList.add('hidden');
 
     const pageSize = ROWS_PER_PAGE || 21;
     const start = (currentPage - 1) * pageSize;
@@ -832,6 +1185,7 @@ function selectRow(tr, row) {
         renderRelationButtons();
         // master context banner removed per user request
     }
+    if (typeof renderGridCustomButtons === 'function') renderGridCustomButtons();
 }
 
 function showDetails(row) {
@@ -841,7 +1195,8 @@ function showDetails(row) {
 // ==================== ФОРМА ====================
 
 async function showInsertForm() {
-    if (!currentWindowConfig?.form && !currentWindowConfig?.insert) {
+    const ins = currentWindowConfig?.insert || currentWindowConfig?.form;
+    if (!ins || !Array.isArray(ins.fields) || ins.fields.length === 0) {
         showToast('Форма добавления не настроена для этого окна', 'error'); return;
     }
     showFormModal('insert');
@@ -849,7 +1204,8 @@ async function showInsertForm() {
 
 async function showUpdateForm() {
     if (!selectedRow) { showToast('Выберите строку', 'error'); return; }
-    if (!currentWindowConfig?.form && !currentWindowConfig?.update) {
+    const upd = currentWindowConfig?.update || currentWindowConfig?.form;
+    if (!upd || !Array.isArray(upd.fields) || upd.fields.length === 0) {
         showToast('Форма редактирования не настроена для этого окна', 'error'); return;
     }
     showFormModal('update', selectedRow);
@@ -864,7 +1220,12 @@ function showFormModal(mode, rowData = null) {
     } else {
         formConfig = currentWindowConfig.form;
     }
-    if (!formConfig) { showToast('Форма не настроена', 'error'); return; }
+    if (!formConfig || !Array.isArray(formConfig.fields) || formConfig.fields.length === 0) {
+        showToast('Форма не настроена для этого окна (нет полей)', 'error');
+        const existing = document.getElementById('form-modal');
+        if (existing) existing.remove();
+        return;
+    }
 
     const isInsert = mode === 'insert';
     const title = isInsert ? 'Создание записи' : 'Редактирование записи';
@@ -1134,18 +1495,8 @@ function showFormModal(mode, rowData = null) {
 
         setupLiveValidation(formConfig ? formConfig.fields : []);
 
-        // Auto-focus first field reliably. Use safe helper for caret.
-        setTimeout(() => {
-            const first = document.querySelector('#form-modal input:not([disabled]):not([type="checkbox"]), #form-modal select:not([disabled]), #form-modal textarea:not([disabled])');
-            if (first) {
-                setFormInputValue(first, first.value, true);
-                first.focus();
-                try {
-                    const len = first.value ? first.value.length : 0;
-                    first.setSelectionRange(len, len);
-                } catch (e) {}
-            }
-        }, 50);
+        // Do NOT auto-focus first input on form open (as requested)
+        // setTimeout(() => { ... }) removed to avoid setting cursor on first field
 
         // Global focusin handler to force caret on any input in this modal (after adding param, switching fields, etc.)
         const modalEl = document.getElementById('form-modal');
@@ -1317,13 +1668,21 @@ async function loadAllLookups() {
             continue;
         }
 
+        // Prevent hang/freeze on large lookup tables for searchable selects:
+        // Limit results for full-list loads (focus shows dropdown with custom rows)
+        if (!/LIMIT\s+\d+/i.test(sql)) {
+            sql += ' LIMIT 500';
+        }
+
         try {
             const result = await window.electronAPI.getLookupData(sql);
             if (field.type === 'lookup' || (field.type === 'select' && field.searchable)) {
                 const dl = document.getElementById('dl-' + field.field);
                 if (dl) {
                     dl.innerHTML = '';
-                    result.forEach(row => {
+                    // cap even after query limit (safety)
+                    const capped = result.slice(0, 500);
+                    capped.forEach(row => {
                         const keys = Object.keys(row);
                         const value = row.value ?? row.val ?? row[keys[0]];
                         const display = row.display ?? row.disp ?? (row[keys[1]] !== undefined ? row[keys[1]] : value);
@@ -1332,7 +1691,7 @@ async function loadAllLookups() {
                         if (display !== value) opt.label = display;
                         dl.appendChild(opt);
                     });
-                    console.log('[lookup] populated datalist for', field.field, 'options=', result.length);
+                    console.log('[lookup] populated datalist for', field.field, 'options=', capped.length);
                 }
             } else {
                 el.innerHTML = '<option value="">— Выберите —</option>';
@@ -1368,160 +1727,164 @@ async function loadAllLookups() {
     }
 }
 
-// Поддержка cascading / master-detail зависимостей в форме (SUPER версия)
+// Поддержка cascading / master-detail зависимостей в форме
 function setupDependentLookups() {
     const formFields = (currentWindowConfig.form && currentWindowConfig.form.fields) || [];
     const insFields = (currentWindowConfig.insert && currentWindowConfig.insert.fields) || [];
     const allFormFields = [...formFields, ...insFields];
 
     const dependentFields = allFormFields.filter(f => f.dependsOn && (f.type === 'select' || f.type === 'lookup'));
+    if (!dependentFields.length) return;
 
-    dependentFields.forEach(depField => {
-        const sourceEl = document.getElementById('f-' + depField.dependsOn);
+    const childrenOf = {};
+    dependentFields.forEach(f => {
+        const parent = f.dependsOn;
+        if (!childrenOf[parent]) childrenOf[parent] = [];
+        childrenOf[parent].push(f);
+    });
+
+    function buildLookupParams(query, val) {
+        if (!val) return [];
+        const count = (query.match(/\?/g) || []).length;
+        return count > 0 ? new Array(count).fill(val) : [];
+    }
+
+    function clearFieldOptions(fieldName) {
+        const fieldDef = allFormFields.find(f => f.field === fieldName);
+        const el = document.getElementById('f-' + fieldName);
+        if (!el) return;
+        el.value = '';
+        const isLookupLike = fieldDef && (fieldDef.type === 'lookup' || (fieldDef.type === 'select' && fieldDef.searchable));
+        if (isLookupLike) {
+            const dl = document.getElementById('dl-' + fieldName);
+            if (dl) dl.innerHTML = '';
+        } else if (el.tagName === 'SELECT') {
+            el.innerHTML = '<option value="">— Выберите —</option>';
+        }
+    }
+
+    function clearFieldTree(fieldName) {
+        clearFieldOptions(fieldName);
+        (childrenOf[fieldName] || []).forEach(child => clearFieldTree(child.field));
+    }
+
+    function populateLookupList(listEl, targetEl, depField, rows) {
+        if (!listEl) return;
+        listEl.innerHTML = '';
+        (rows || []).forEach(row => {
+            const keys = Object.keys(row);
+            const value = row.value ?? row.val ?? row[keys[0]];
+            const display = row.display ?? row.disp ?? (row[keys[1]] !== undefined ? row[keys[1]] : value);
+            const opt = document.createElement('option');
+            opt.value = value != null ? value : '';
+            if (display !== value && display != null) opt.label = display;
+            listEl.appendChild(opt);
+        });
+
+        if (rows && rows.length === 1 && targetEl) {
+            try {
+                const r0 = rows[0];
+                const kk = Object.keys(r0);
+                const sv = r0.value ?? r0.val ?? r0[kk[0]];
+                if (sv != null && sv !== '') {
+                    setFormInputValue(targetEl, String(sv), false);
+                    if (depField.disabled) targetEl.disabled = true;
+                    if (depField.readonly) targetEl.readOnly = true;
+                    listEl.innerHTML = '';
+                    if (targetEl.tagName === 'INPUT') targetEl.removeAttribute('list');
+                }
+            } catch (_) {}
+        }
+    }
+
+    function populateSelect(selEl, rows, withPlaceholder = true) {
+        if (!selEl) return;
+        selEl.innerHTML = withPlaceholder ? '<option value="">— Выберите —</option>' : '';
+        (rows || []).forEach(row => {
+            const keys = Object.keys(row);
+            const value = row.value ?? row.val ?? row[keys[0]];
+            const display = row.display ?? row.disp ?? (row[keys[1]] !== undefined ? row[keys[1]] : value);
+            selEl.innerHTML += `<option value="${value}">${display}</option>`;
+        });
+    }
+
+    async function refreshDependentField(depField, sourceVal) {
         const targetEl = document.getElementById('f-' + depField.field);
-        if (!sourceEl || !targetEl) return;
+        if (!targetEl) return;
 
         const isLookupTarget = depField.type === 'lookup' || (depField.type === 'select' && depField.searchable);
         const targetListEl = isLookupTarget ? document.getElementById('dl-' + depField.field) : null;
 
-        function populateLookupList(listEl, rows) {
-            if (!listEl) return;
-            listEl.innerHTML = '';
-            (rows || []).forEach(row => {
-                const keys = Object.keys(row);
-                const value = row.value ?? row.val ?? row[keys[0]];
-                const display = row.display ?? row.disp ?? (row[keys[1]] !== undefined ? row[keys[1]] : value);
-                const opt = document.createElement('option');
-                opt.value = value != null ? value : '';
-                if (display !== value && display != null) opt.label = display;
-                listEl.appendChild(opt);
-            });
+        if (!sourceVal) {
+            clearFieldTree(depField.field);
+            return;
+        }
 
-            // Если cascading lookup вернул ровно 1 значение — автоподставляем и прячем список
-            if (rows && rows.length === 1 && targetEl) {
-                try {
-                    const r0 = rows[0];
-                    const kk = Object.keys(r0);
-                    const sv = r0.value ?? r0.val ?? r0[kk[0]];
-                    if (sv != null && sv !== '' && (!targetEl.value || targetEl.value === '')) {
-                        targetEl.value = String(sv);
-                        if (depField.disabled) targetEl.disabled = true;
-                        if (depField.readonly) targetEl.readOnly = true;
-                        if (listEl) listEl.innerHTML = '';
-                        if (targetEl.tagName === 'INPUT') targetEl.removeAttribute('list');
-                        console.log('[autofill-single-casc] 1 option auto set (no dropdown)', depField.field);
-                    }
-                } catch (_) {}
+        let sql = depField.lookupQuery || (depField.lookup && depField.lookup.sql);
+        if (!sql && depField.type === 'lookup' && typeof depField.defaultValue === 'string' && depField.defaultValue.trim().toLowerCase().startsWith('select ')) {
+            sql = depField.defaultValue.trim();
+        }
+
+        if (Array.isArray(depField.lookupConditions)) {
+            const match = depField.lookupConditions.find(c => String(c.value || '').trim() === String(sourceVal).trim());
+            if (match && match.query) sql = match.query;
+        }
+
+        if (!sql && (depField.lookupWindow || (depField.lookup && depField.lookup.window))) {
+            const winId = depField.lookupWindow || depField.lookup?.window;
+            const targetWin = (fullConfig && fullConfig.windows || []).find(w => (w.id || w.windowId) == winId);
+            if (targetWin) {
+                const tds = targetWin.dataSource || targetWin;
+                let tbl = tds.table || targetWin.table;
+                if (!tbl && (tds.query || targetWin.query)) {
+                    const m = (tds.query || targetWin.query).match(/FROM\s+([A-Za-z0-9_]+)/i);
+                    if (m) tbl = m[1];
+                }
+                const valF = depField.lookupValueField || 'value';
+                const dispF = depField.lookupDisplayField || valF;
+                if (tbl) {
+                    sql = `SELECT ${valF} as value, COALESCE(${dispF}, ${valF}) as display FROM ${tbl} WHERE ${depField.dependsOn} = ? LIMIT 2000`;
+                }
             }
         }
 
-        function populateSelect(selEl, rows, withPlaceholder = true) {
-            if (!selEl) return;
-            selEl.innerHTML = withPlaceholder ? '<option value="">— Выберите —</option>' : '';
-            (rows || []).forEach(row => {
-                const keys = Object.keys(row);
-                const value = row.value ?? row.val ?? row[keys[0]];
-                const display = row.display ?? row.disp ?? (row[keys[1]] !== undefined ? row[keys[1]] : value);
-                selEl.innerHTML += `<option value="${value}">${display}</option>`;
-            });
+        if (!sql) return;
+
+        const params = buildLookupParams(sql, sourceVal);
+        const result = await window.electronAPI.getLookupData(sql, params);
+        if (isLookupTarget) {
+            populateLookupList(targetListEl, targetEl, depField, result);
+            setTimeout(() => setupCustomSearchableDropdown(targetEl, depField), 40);
+        } else {
+            populateSelect(targetEl, result, true);
         }
 
-        const refresh = async () => {
-            try {
-                let sql = depField.lookupQuery || (depField.lookup && depField.lookup.sql);
+        if (targetEl.value) {
+            setTimeout(() => targetEl.dispatchEvent(new Event('change', { bubbles: true })), 20);
+        }
+    }
 
-                // Fallback for lookup type with SELECT mistakenly in defaultValue
-                if (!sql && depField.type === 'lookup' && typeof depField.defaultValue === 'string' && depField.defaultValue.trim().toLowerCase().startsWith('select ')) {
-                    sql = depField.defaultValue.trim();
-                }
+    dependentFields.forEach(depField => {
+        const sourceEl = document.getElementById('f-' + depField.dependsOn);
+        if (!sourceEl) return;
 
-                const sourceVal = sourceEl.value;
-
-                // NEW: support conditional different queries based on dependsOn value
-                // Example: if City == "Երևան" use DISTRICTS, else normal query
-                let usedConditional = false;
-                if (sourceVal && Array.isArray(depField.lookupConditions)) {
-                  const match = depField.lookupConditions.find(c => String(c.value || '').trim() === String(sourceVal).trim());
-                  if (match && match.query) {
-                    sql = match.query;
-                    usedConditional = true;
-                  }
-                }
-
-                // Helper: repeat the source value for every ? in the query
-                // This allows complex CASE WHEN ? = 'val' ... or multiple uses in one SQL
-                function buildLookupParams(query, val) {
-                  if (!val) return [];
-                  const count = (query.match(/\?/g) || []).length;
-                  return count > 0 ? new Array(count).fill(val) : [];
-                }
-
-                // If explicit lookupQuery exists (best case for user's Armenia example)
-                if (sql && sourceVal) {
-                    // Always compute params from the final sql (works for both normal cascading and conditional queries)
-                    const params = buildLookupParams(sql, sourceVal);
-                    const res = await window.electronAPI.getLookupData(sql, params);
-                    if (isLookupTarget || (depField.type === 'select' && depField.searchable)) {
-                        populateLookupList(targetListEl, res);
-                    } else {
-                        populateSelect(targetEl, res, true);
-                    }
-                    if (targetEl.value) setTimeout(() => targetEl.dispatchEvent(new Event('change')), 20);
-                    if (isLookupTarget) setTimeout(() => setupCustomSearchableDropdown(targetEl, depField), 40);
-                    return;
-                }
-
-                // Fallback to window based + auto filter
-                if (!sql && (depField.lookupWindow || (depField.lookup && depField.lookup.window))) {
-                    const winId = depField.lookupWindow || depField.lookup?.window;
-                    const targetWin = (fullConfig && fullConfig.windows || []).find(w => (w.id || w.windowId) == winId);
-                    if (targetWin) {
-                        const tds = targetWin.dataSource || targetWin;
-                        let tbl = tds.table || targetWin.table;
-                        if (!tbl && (tds.query || targetWin.query)) {
-                            const m = (tds.query || targetWin.query).match(/FROM\s+([A-Za-z0-9_]+)/i);
-                            if (m) tbl = m[1];
-                        }
-                        const valF = depField.lookupValueField || depField.lookupValueField || 'value';
-                        const dispF = depField.lookupDisplayField || valF;
-                        if (tbl) {
-                            sql = `SELECT ${valF} as value, COALESCE(${dispF}, ${valF}) as display FROM ${tbl}`;
-                            if (sourceVal) {
-                                // Try smart filter: use dependsOn field name as FK
-                                const fk = depField.dependsOn;
-                                sql += ` WHERE ${fk} = ? `;
-                            }
-                            sql += ' LIMIT 2000';
-                        }
-                    }
-                }
-
-                if (sql && sourceVal) {
-                    const params = buildLookupParams(sql, sourceVal);
-                    const result = await window.electronAPI.getLookupData(sql, params);
-                    if (isLookupTarget || (depField.type === 'select' && depField.searchable)) {
-                        populateLookupList(targetListEl, result);
-                    } else {
-                        populateSelect(targetEl, result, true);
-                    }
-                    if (isLookupTarget) setTimeout(() => setupCustomSearchableDropdown(targetEl, depField), 40);
-                } else if (sql) {
-                    // no value yet — load all or empty
-                    await loadAllLookups();
-                }
-
-                if (targetEl.value) setTimeout(() => targetEl.dispatchEvent(new Event('change')), 10);
-            } catch (e) {
-                console.error('Cascading lookup error', e);
-            }
+        const onParentChange = () => {
+            clearFieldTree(depField.field);
+            const sourceVal = (sourceEl.value || '').trim();
+            refreshDependentField(depField, sourceVal);
         };
 
-        sourceEl.addEventListener('change', refresh);
-        sourceEl.addEventListener('input', refresh);
+        if (!sourceEl._dependsOnRefreshers) sourceEl._dependsOnRefreshers = [];
+        sourceEl._dependsOnRefreshers.push(onParentChange);
+        if (!sourceEl._dependsOnMasterWired) {
+            sourceEl._dependsOnMasterWired = true;
+            sourceEl.addEventListener('change', () => {
+                (sourceEl._dependsOnRefreshers || []).forEach(fn => fn());
+            });
+        }
 
-        // initial populate if parent already has value (e.g. on edit)
-        if (sourceEl.value) {
-          setTimeout(refresh, 50);
+        if ((sourceEl.value || '').trim()) {
+            setTimeout(onParentChange, 50);
         }
     });
 }
@@ -1534,45 +1897,39 @@ function setupCustomSearchableDropdown(inputEl, fieldCfg) {
   if (!inputEl || inputEl.tagName !== 'INPUT') return;
   if (inputEl.disabled || inputEl.readOnly) return;
 
-  // Clean previous handlers if re-setup (helps recover after modals / form switches)
+  // Clean previous handlers
   if (inputEl._searchableHandlers) {
     const h = inputEl._searchableHandlers;
     inputEl.removeEventListener('focus', h.focus);
     inputEl.removeEventListener('click', h.click);
     inputEl.removeEventListener('input', h.input);
     inputEl.removeEventListener('keydown', h.keydown);
-    if (inputEl._mousedownHandler) {
-      inputEl.removeEventListener('mousedown', inputEl._mousedownHandler);
-    }
+    if (inputEl._mousedownHandler) inputEl.removeEventListener('mousedown', inputEl._mousedownHandler);
   }
 
-  // убираем нативный list
   inputEl.removeAttribute('list');
 
   let drop = null;
-  let allOpts = []; // [{value, display}]
+  let allOpts = [];
 
   function getAllOptions() {
     allOpts = [];
-    // 1. из datalist (если уже наполнен)
     const dl = document.getElementById('dl-' + fieldCfg.field);
     if (dl && dl.options.length) {
       Array.from(dl.options).forEach(o => {
         if (o.value) allOpts.push({ value: o.value, display: o.label || o.value });
       });
     }
-    // 2. из field.options (ручной)
-    if ((!allOpts.length) && Array.isArray(fieldCfg.options)) {
-      allOpts = fieldCfg.options.map(o => typeof o === 'string' ? {value: o, display: o} : {value: o.value || '', display: o.display || o.value || ''});
+    if (!allOpts.length && Array.isArray(fieldCfg.options)) {
+      allOpts = fieldCfg.options.map(o => 
+        typeof o === 'string' ? {value: o, display: o} : {value: o.value || '', display: o.display || o.value || ''}
+      );
     }
     return allOpts;
   }
 
   function renderDrop(filtered) {
-    // Close any current dropdown first
     closeCurrentDropdown();
-
-    // Extra safety: remove any stray high-z dropdown divs
     document.querySelectorAll('div.fixed.z-\\[99999\\]').forEach(d => d.remove());
 
     if (!filtered || !filtered.length) return;
@@ -1599,28 +1956,22 @@ function setupCustomSearchableDropdown(inputEl, fieldCfg) {
         inputEl.dispatchEvent(new Event('input', {bubbles: true}));
         inputEl.dispatchEvent(new Event('change', {bubbles: true}));
         closeCurrentDropdown();
-        // Сразу убираем визуальный фокус после выбора — поле выглядит заполненным, а не "выбранным"
-        setTimeout(() => {
-          inputEl.blur();
-        }, 0);
+        setTimeout(() => inputEl.blur(), 0);
       };
       listWrap.appendChild(row);
     });
 
     drop.appendChild(listWrap);
 
-    // позиционируем под инпутом (fixed — координаты viewport, без scrollY!)
     const r = inputEl.getBoundingClientRect();
     drop.style.left = r.left + 'px';
     drop.style.top = (r.bottom + 3) + 'px';
     drop.style.width = r.width + 'px';
 
     document.body.appendChild(drop);
-
     currentDrop = drop;
     currentInputEl = inputEl;
 
-    // Make sure input stays focused and has caret even if previous modals left focus in bad state
     inputEl.focus();
     setTimeout(() => {
       if (document.activeElement === inputEl) {
@@ -1631,7 +1982,6 @@ function setupCustomSearchableDropdown(inputEl, fieldCfg) {
       }
     }, 0);
 
-    // Use the permanent global closer (no per-instance accumulation)
     installGlobalDropdownCloser();
   }
 
@@ -1649,51 +1999,48 @@ function setupCustomSearchableDropdown(inputEl, fieldCfg) {
         (op.display || '').toLowerCase().includes(q)
       );
     }
-    if (f.length > 0) {
-      renderDrop(f);
-    } else {
-      hideDrop();
-    }
+    f = f.slice(0, 100);
+    if (f.length > 0) renderDrop(f);
+    else hideDrop();
   }
 
-  // События — показываем список при фокусе И клике (чтобы было видно)
   const showAll = () => {
     const opts = getAllOptions();
-    renderDrop(opts);
-    // Re-assert caret after dropdown appears (Electron caret visibility fix when switching fields)
+    renderDrop(opts.slice(0, 100));
+
     setTimeout(() => {
       if (document.activeElement === inputEl) {
         try {
           const len = inputEl.value ? inputEl.value.length : 0;
           inputEl.setSelectionRange(len, len);
-        } catch(e){}
+        } catch (e) {}
       }
     }, 0);
   };
+
+  // Store handlers for cleanup
+  inputEl._searchableHandlers = {
+    focus: showAll,
+    click: showAll,
+    input: doFilterAndShow,
+    keydown: (e) => { if (e.key === 'Escape') hideDrop(); }
+  };
+
   inputEl.addEventListener('focus', showAll);
   inputEl.addEventListener('click', showAll);
+  inputEl.addEventListener('input', doFilterAndShow);
+  inputEl.addEventListener('keydown', inputEl._searchableHandlers.keydown);
 
-  // mousedown + focus + click to ensure the selector (dropdown) always shows when switching forms
-  // without needing to alt-tab to another app first
-  inputEl.addEventListener('mousedown', () => {
+  // mousedown safety
+  inputEl._mousedownHandler = () => {
     setTimeout(() => {
       const opts = getAllOptions();
       renderDrop(opts);
     }, 0);
-  });
+  };
+  inputEl.addEventListener('mousedown', inputEl._mousedownHandler);
 
-  inputEl.addEventListener('input', () => {
-    doFilterAndShow();
-  });
-
-  // клавиатура минимально
-  inputEl.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') hideDrop();
-  });
-
-  // если при загрузке уже есть 1 вариант и пусто — подставить (уже делаем раньше)
-
-  // Extra: force caret on focus (helps after adding param / value set / switch)
+  // Extra caret safety
   inputEl.addEventListener('focus', () => {
     setTimeout(() => {
       if (document.activeElement === inputEl && document.getElementById('form-modal')) {
@@ -1705,6 +2052,7 @@ function setupCustomSearchableDropdown(inputEl, fieldCfg) {
     }, 0);
   });
 }
+
 
 // Вызываем после заполнения списков
 function setupAllCustomDropdowns(formFields) {
@@ -1839,8 +2187,7 @@ async function computeSetValueForSpec(spec) {
       return '';
     } catch (e) {
       console.error('[setFields sql] error', q, e);
-      showToast('Ошибка выполнения SQL в кнопке: ' + e.message, 'error');
-      return '';
+      throw e;  // let caller (handleCustomFormButton) decide the message (customError if provided)
     }
   }
 
@@ -1855,8 +2202,112 @@ async function computeSetValueForSpec(spec) {
   return '';
 }
 
+function collectFormFieldData(formConfig) {
+    const formData = {};
+    const fieldsToUse = (formConfig && formConfig.fields) || [];
+    fieldsToUse.forEach(f => {
+        const el = document.getElementById('f-' + f.field);
+        if (!el) return;
+        if (f.type === 'checkbox') {
+            formData[f.field] = el.checked ? (f.checkedValue || 'Y') : (f.uncheckedValue || '');
+        } else {
+            formData[f.field] = el.value || '';
+        }
+    });
+    return formData;
+}
+
+function resolveExportOutputFilename(btn, data) {
+    if (btn.outputFilename && String(btn.outputFilename).trim()) {
+        return String(btn.outputFilename).trim();
+    }
+    const ts = new Date().toISOString().slice(0, 19).replace(/[-:]/g, '');
+    return 'export_' + ts + '.xlsx';
+}
+
+async function handleExportExcelAction(btn, context) {
+    const customError = btn.errorMessage || btn.error || '';
+    const customSuccess = btn.successMessage || '';
+    const cellMap = btn.defaultCellMapping || btn.mapping || {};
+    const mapKeys = Object.keys(cellMap || {});
+
+    if (!mapKeys.length) {
+        showToast(customError || 'Не настроен маппинг полей → ячеек Excel', 'error');
+        return;
+    }
+
+    let data = {};
+    if (context && context.source === 'form') {
+        data = collectFormFieldData(context.formConfig);
+    } else {
+        data = { ...((context && context.row) || selectedRow || {}) };
+    }
+
+    const hasTemplate = !!(btn.templateFile || btn.templatePath || btn.template);
+    let exportRes;
+
+    try {
+        if (hasTemplate) {
+            exportRes = parseExportResult(await window.electronAPI.exportXlsxTemplate({
+                templateDir: btn.templateDir || 'C:\\GTerminalPro\\templates',
+                templateFile: btn.templateFile || btn.template || '',
+                templatePath: btn.templatePath || '',
+                cellMapping: cellMap,
+                data,
+                outputFilename: resolveExportOutputFilename(btn, data)
+            }));
+        } else {
+            const exportRow = {};
+            mapKeys.forEach(field => {
+                exportRow[cellMap[field]] = data[field] != null ? data[field] : '';
+            });
+            const fname = resolveExportOutputFilename(btn, data);
+            exportRes = parseExportResult(await window.electronAPI.exportXlsx([exportRow], fname));
+        }
+
+        if (exportRes.success) {
+            showToast(customSuccess || ('Экспорт в Excel выполнен: ' + (exportRes.path || exportRes.filename || '')));
+        } else {
+            showToast(customError || ('Ошибка экспорта: ' + (exportRes.error || 'неизвестная ошибка')), 'error');
+        }
+    } catch (e) {
+        showToast(customError || ('Ошибка экспорта в Excel: ' + e.message), 'error');
+    }
+}
+
+function renderGridCustomButtons() {
+    const container = document.getElementById('grid-custom-buttons');
+    if (!container || !currentWindowConfig) return;
+    container.innerHTML = '';
+
+    const buttons = (currentWindowConfig.formCustomButtons || []).filter(btn => {
+        const modes = Array.isArray(btn.modes) && btn.modes.length > 0 ? btn.modes : ['insert', 'update'];
+        return btn.action === 'exportExcel' && modes.includes('select');
+    });
+
+    if (!selectedRow || !buttons.length) return;
+
+    buttons.forEach(btn => {
+        const b = document.createElement('button');
+        b.textContent = btn.label || 'Выгрузить в Excel';
+        b.className = 'px-3 py-2 rounded-lg text-xs font-medium transition-all';
+        if (btn.style) {
+            if (btn.style.bg) b.style.backgroundColor = btn.style.bg;
+            if (btn.style.color) b.style.color = btn.style.color;
+            if (btn.style.width && btn.style.width !== 'auto') b.style.width = btn.style.width;
+            if (btn.style.height && btn.style.height !== 'auto') b.style.height = btn.style.height;
+        } else {
+            b.className += ' bg-emerald-700 hover:bg-emerald-600 text-white';
+        }
+        b.onclick = () => handleExportExcelAction(btn, { source: 'row', row: selectedRow });
+        container.appendChild(b);
+    });
+}
+
 async function handleCustomFormButton(btn, isInsert, formConfig) {
   const action = btn.action || 'setFields';
+  const customError = btn.errorMessage || btn.error || '';
+  const customSuccess = btn.successMessage || '';
 
   if (action === 'setFields' || action === 'updateFields') {
     // Rich support: array of specs with valueType, or legacy flat object
@@ -1873,29 +2324,35 @@ async function handleCustomFormButton(btn, isInsert, formConfig) {
       });
     }
 
-    for (const spec of specs) {
-      const val = await computeSetValueForSpec(spec);
-      const el = document.getElementById('f-' + spec.field);
-      if (el) {
-        setFormInputValue(el, (val != null ? val : ''), document.activeElement === el);
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        // ensure even disabled/readonly inputs get the value for save
-        if (el.disabled) el.disabled = false;
+    try {
+      for (const spec of specs) {
+        const val = await computeSetValueForSpec(spec);
+        const el = document.getElementById('f-' + spec.field);
+        if (el) {
+          setFormInputValue(el, (val != null ? val : ''), document.activeElement === el);
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          // ensure even disabled/readonly inputs get the value for save
+          if (el.disabled) el.disabled = false;
+        }
       }
-    }
 
-    const willSave = !!btn.saveAfter || !!btn.autoSave;
-    showToast(willSave ? 'Значения установлены. Выполняется сохранение в БД...' : 'Значения установлены в форму. Нажмите Сохранить.');
-    if (willSave) {
-      setTimeout(() => {
-        try {
-          if (isInsert && typeof saveNewRecord === 'function') {
-            saveNewRecord();
-          } else if (typeof saveUpdatedRecord === 'function') {
-            saveUpdatedRecord();
-          }
-        } catch (e) { console.warn('auto-save after set failed', e); }
-      }, 80);
+      const willSave = !!btn.saveAfter || !!btn.autoSave;
+      const successText = customSuccess || (willSave ? 'Значения установлены. Выполняется сохранение в БД...' : 'Значения установлены в форму. Нажмите Сохранить.');
+      showToast(successText);
+      if (willSave) {
+        setTimeout(() => {
+          try {
+            if (isInsert && typeof saveNewRecord === 'function') {
+              saveNewRecord();
+            } else if (typeof saveUpdatedRecord === 'function') {
+              saveUpdatedRecord();
+            }
+          } catch (e) { console.warn('auto-save after set failed', e); }
+        }, 80);
+      }
+    } catch (e) {
+      const msg = customError || ('Ошибка установки значений: ' + (e && e.message || e));
+      showToast(msg, 'error');
     }
   } else if (action === 'importExcel') {
     try {
@@ -1913,48 +2370,21 @@ async function handleCustomFormButton(btn, isInsert, formConfig) {
         // Алерт при отсутствии маппинга или пустом результате тоже убран.
         const appliedCount = await applyImportedExcelCells(filePath, defaultMap);
         if (appliedCount > 0) {
-          showToast(`Данные из Excel применены автоматически (${appliedCount} полей).`);
+          const successText = customSuccess || `Данные из Excel применены автоматически (${appliedCount} полей).`;
+          showToast(successText);
+        } else if (mapKeys.length > 0 && customError) {
+          // При неправильности (ничего не применилось) — показываем указанную пользователем ошибку
+          showToast(customError, 'error');
         }
-        // если маппинг пустой или не применилось ничего — тихо выходим
+        // если маппинг пустой или не применилось ничего — тихо выходим (или custom error выше)
       } 
       // отсутствие маппинга — ничего не делаем и не показываем алертов
     } catch (e) {
-      showToast('Ошибка импорта Excel: ' + e.message, 'error');
+      const msg = customError || ('Ошибка импорта Excel: ' + e.message);
+      showToast(msg, 'error');
     }
   } else if (action === 'exportExcel') {
-    try {
-      // Collect current form data
-      const formData = {};
-      const fieldsToUse = formConfig.fields || [];
-      fieldsToUse.forEach(f => {
-        const el = document.getElementById('f-' + f.field);
-        if (el) {
-          let val = '';
-          if (f.type === 'checkbox') {
-            val = el.checked ? (f.checkedValue || 'Y') : (f.uncheckedValue || '');
-          } else {
-            val = el.value || '';
-          }
-          formData[f.field] = val;
-        }
-      });
-
-      let exportRow = formData;
-      if (btn.mapping && Object.keys(btn.mapping).length > 0) {
-        // reverse mapping: formField -> excelCol
-        exportRow = {};
-        Object.keys(btn.mapping).forEach(formField => {
-          const excelCol = btn.mapping[formField];
-          exportRow[excelCol] = formData[formField] || '';
-        });
-      }
-
-      const filename = 'export_' + new Date().toISOString().slice(0,19).replace(/[-:]/g,'') + '.xlsx';
-      await window.electronAPI.exportXlsx([exportRow], filename);
-      showToast('Экспорт в Excel выполнен: ' + filename);
-    } catch (e) {
-      showToast('Ошибка экспорта в Excel: ' + e.message, 'error');
-    }
+    await handleExportExcelAction(btn, { source: 'form', formConfig });
   }
 }
 
@@ -2012,8 +2442,8 @@ async function applyImportedExcelCells(filePath, fieldToCellMap) {
       const val = await window.electronAPI.readExcelCell(filePath, cellRef);
       const el = document.getElementById('f-' + fld);
       if (el) {
-        el.value = val != null ? val : '';
-        el.dispatchEvent(new Event('input', { bubbles: true }));
+        setFormInputValue(el, val != null ? val : '', false);
+        el.dispatchEvent(new Event('change', { bubbles: true }));
         applied++;
       }
     } catch (e) {
@@ -2074,6 +2504,25 @@ async function validateField(field, value) {
             }
         }
 
+        if (v.type === 'uppercase') {
+            if (strVal && strVal !== strVal.toUpperCase()) {
+                errors.push(v.error || 'Поле должно быть в верхнем регистре');
+            }
+        }
+
+        if (v.type === 'lowercase') {
+            if (strVal && strVal !== strVal.toLowerCase()) {
+                errors.push(v.error || 'Поле должно быть в нижнем регистре');
+            }
+        }
+
+        if (v.type === 'trim') {
+            const original = String(value == null ? '' : value);
+            if (original !== original.trim()) {
+                errors.push(v.error || 'Не должно быть пробелов в начале и конце текста');
+            }
+        }
+
         if (v.type === 'language' && v.language) {
             let regex = null;
             const lang = v.language;
@@ -2122,6 +2571,44 @@ async function validateField(field, value) {
                 }
             } catch (e) {
                 errors.push(v.error || 'Ошибка в условии валидации');
+            }
+        }
+
+        if (v.type === 'uppercase') {
+            if (strVal && strVal !== strVal.toUpperCase()) {
+                errors.push(v.error || 'Поле должно быть в верхнем регистре');
+            }
+        }
+
+        if (v.type === 'lowercase') {
+            if (strVal && strVal !== strVal.toLowerCase()) {
+                errors.push(v.error || 'Поле должно быть в нижнем регистре');
+            }
+        }
+
+        if (v.type === 'trim') {
+            const original = String(value == null ? '' : value);
+            if (original !== original.trim()) {
+                errors.push(v.error || 'Не должно быть пробелов в начале и конце текста');
+            }
+        }
+
+        if (v.type === 'uppercase') {
+            if (strVal && strVal !== strVal.toUpperCase()) {
+                errors.push(v.error || 'Поле должно быть в верхнем регистре');
+            }
+        }
+
+        if (v.type === 'lowercase') {
+            if (strVal && strVal !== strVal.toLowerCase()) {
+                errors.push(v.error || 'Поле должно быть в нижнем регистре');
+            }
+        }
+
+        if (v.type === 'trim') {
+            const original = String(value == null ? '' : value);
+            if (original !== original.trim()) {
+                errors.push(v.error || 'Не должно быть пробелов в начале и конце текста');
             }
         }
 
@@ -2826,6 +3313,12 @@ async function saveUpdatedRecord() {
 // ==================== АДМИН + РЕДАКТОР ====================
 
 async function openAdminWindow() {
+    // ensure fresh fullConfig
+    if (window.electronAPI && window.electronAPI.getConfig) {
+      try { fullConfig = await window.electronAPI.getConfig() || fullConfig; } catch(e){}
+    }
+    if (!fullConfig) fullConfig = { title: 'GTerminalPro', database: '', logo: '', windows: [] };
+
     // Clean floating admin guide buttons when going back to list
     document.querySelectorAll('#admin-floating-guide').forEach(el => el.remove());
 
@@ -2848,6 +3341,12 @@ async function openAdminWindow() {
               return '<div onclick="if(window.selectAdminWindow) window.selectAdminWindow(\'' + safe + '\');" class="bg-slate-800 border border-slate-700 hover:border-amber-500 rounded-2xl p-4 cursor-pointer"><div class="font-semibold">' + w.title + '</div><div class="text-xs text-slate-400">' + (w.id || '') + '</div><div class="text-[10px] text-amber-400 mt-3">Открыть настройки →</div></div>';
           }).join('') + '</div>';
 
+    // Prepare logo preview src
+    let logoSrc = fullConfig.logo || '';
+    if (logoSrc && !logoSrc.startsWith('data:') && !logoSrc.startsWith('file:')) {
+      logoSrc = 'file:///' + logoSrc.replace(/\\/g, '/');
+    }
+
     container.innerHTML = 
         '<div class="p-6 max-w-7xl mx-auto h-full overflow-auto custom-scroll">' +
         '<div class="flex items-center justify-between mb-6">' +
@@ -2857,6 +3356,35 @@ async function openAdminWindow() {
         '<button onclick="addNewWindow()" class="bg-blue-600 hover:bg-blue-500 px-4 py-1.5 rounded-xl text-sm font-semibold flex items-center gap-2"><i class="fas fa-plus"></i> + Новое окно</button>' +
         '<button onclick="showAdminGuide()" class="bg-slate-700 hover:bg-slate-600 px-3 py-1.5 rounded-xl text-sm flex items-center gap-1" title="Справка и User Guide"><i class="fas fa-question-circle"></i> ?</button>' +
         '</div></div>' +
+
+        '<!-- ОБЩИЕ НАСТРОЙКИ ПРИЛОЖЕНИЯ (включая логотип) -->' +
+        '<div class="mb-6 bg-slate-800 border border-slate-700 rounded-2xl p-4">' +
+        '<h3 class="text-lg font-semibold mb-3 text-amber-300">Общие настройки приложения</h3>' +
+        '<div class="grid grid-cols-1 md:grid-cols-2 gap-4">' +
+        '<div>' +
+        '<label class="block text-xs text-slate-400 mb-1">Название приложения</label>' +
+        '<input id="app-title" value="' + (fullConfig.title || '') + '" class="w-full bg-slate-900 border border-slate-600 rounded-xl px-3 py-1.5 text-sm">' +
+        '</div>' +
+        '<div>' +
+        '<label class="block text-xs text-slate-400 mb-1">Путь к базе данных (абсолютный или относительный)</label>' +
+        '<input id="app-database" value="' + (fullConfig.database || '') + '" class="w-full bg-slate-900 border border-slate-600 rounded-xl px-3 py-1.5 text-sm">' +
+        '</div>' +
+        '</div>' +
+        '<div class="mt-4">' +
+        '<label class="block text-xs text-slate-400 mb-1">Логотип (выберите файл — сохранится как data URL в конфиг, чтобы не зависеть от путей в portable)</label>' +
+        '<div class="flex gap-2 items-center">' +
+        '<input type="file" id="app-logo-file" accept="image/*" class="text-sm file:mr-2 file:px-3 file:py-1 file:rounded-xl file:border-0 file:bg-blue-700 file:text-white">' +
+        '<button onclick="previewAndSetLogo()" class="bg-blue-600 hover:bg-blue-500 px-3 py-1 rounded-xl text-sm">Загрузить</button>' +
+        '<button onclick="clearLogo()" class="bg-red-600 hover:bg-red-500 px-3 py-1 rounded-xl text-sm">Очистить</button>' +
+        '</div>' +
+        '<div id="logo-preview" class="mt-2 w-16 h-16 border border-slate-600 rounded-xl overflow-hidden bg-slate-900 flex items-center justify-center">' +
+        (logoSrc ? '<img src="' + logoSrc.replace(/"/g, '&quot;') + '" style="max-width:100%; max-height:100%; object-fit:contain;">' : '<span class="text-[10px] text-slate-500">нет логотипа</span>') +
+        '</div>' +
+        '<div class="text-[10px] text-slate-500 mt-1">Логотип будет встроен в config.json (data URL). Подходит для single-exe portable. Размер контейнера в сайдбаре маленький — картинка масштабируется.</div>' +
+        '</div>' +
+        '<button onclick="saveGeneralSettings()" class="mt-4 bg-emerald-700 hover:bg-emerald-600 px-4 py-1.5 rounded-xl text-sm font-semibold">Сохранить общие настройки + логотип</button>' +
+        '</div>' +
+
         '<div class="flex items-center justify-between mb-3"><h3 class="text-lg font-semibold">Окна</h3></div>' +
         listHtml +
         '<div class="mt-8">' +
@@ -2870,6 +3398,55 @@ async function openAdminWindow() {
 
 if (typeof window !== 'undefined') {
   window.openAdminWindow = openAdminWindow;
+  window.previewAndSetLogo = previewAndSetLogo;
+  window.clearLogo = clearLogo;
+  window.saveGeneralSettings = saveGeneralSettings;
+}
+
+async function previewAndSetLogo() {
+  const fileInput = document.getElementById('app-logo-file');
+  if (!fileInput || !fileInput.files || !fileInput.files[0]) {
+    alert('Выберите файл изображения');
+    return;
+  }
+  const file = fileInput.files[0];
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    fullConfig.logo = e.target.result; // data URL
+    const preview = document.getElementById('logo-preview');
+    if (preview) {
+      preview.innerHTML = '<img src="' + fullConfig.logo + '" style="max-width:100%; max-height:100%; object-fit:contain;">';
+    }
+  };
+  reader.readAsDataURL(file);
+}
+
+function clearLogo() {
+  fullConfig.logo = '';
+  const preview = document.getElementById('logo-preview');
+  if (preview) {
+    preview.innerHTML = '<span class="text-[10px] text-slate-500">нет логотипа</span>';
+  }
+}
+
+async function saveGeneralSettings() {
+  if (!fullConfig) {
+    fullConfig = await window.electronAPI.loadConfig();
+  }
+  fullConfig.title = (document.getElementById('app-title') || {}).value || fullConfig.title || 'GTerminalPro';
+  fullConfig.database = (document.getElementById('app-database') || {}).value || fullConfig.database || '';
+  // logo is already set via previewAndSetLogo or cleared
+
+  try {
+    await window.electronAPI.saveConfig(fullConfig);
+    // update live UI
+    const topTitle = document.getElementById('window-title');
+    if (topTitle) topTitle.textContent = fullConfig.title || 'GTerminalPro';
+    updateLogo();
+    alert('Общие настройки и логотип сохранены в конфиг!');
+  } catch (e) {
+    alert('Ошибка сохранения: ' + e.message);
+  }
 }
 
 async function showUsersManagement() {
@@ -3225,14 +3802,15 @@ function renderAdminConfigUI() {
         '</div>' +
 
         '<div class="mt-4 bg-slate-800 border border-slate-700 rounded-2xl p-4">' +
-        '<div class="flex justify-between mb-2"><h3 class="text-violet-400 font-semibold">ФИЛЬТРЫ (оператор выбирается в окне)</h3><button onclick="addFilter()" class="bg-violet-600 px-2 py-0.5 rounded text-xs">+ Фильтр</button></div>' +
+        '<div class="flex justify-between mb-2"><h3 class="text-violet-400 font-semibold">ФИЛЬТРЫ (операторы настраиваются здесь)</h3><button onclick="addFilter()" class="bg-violet-600 px-2 py-0.5 rounded text-xs">+ Фильтр</button></div>' +
+        '<div class="text-[9px] text-slate-500 mb-1">Можно выбрать стандартные операторы и добавить кастомные SQL (например: closed → CloseDate IS NOT NULL).</div>' +
         '<div id="filters-list" class="space-y-1 max-h-[120px] overflow-auto custom-scroll"></div>' +
         '</div>' +
 
         '<div class="mt-4 bg-slate-800 border border-slate-700 rounded-2xl p-4">' +
         '<div class="flex justify-between mb-2"><h3 class="text-orange-400 font-semibold">КНОПКИ В ФОРМЕ (вверху формы)</h3><button onclick="addFormButton()" class="bg-orange-600 px-2 py-0.5 rounded text-xs">+ Добавить кнопку</button></div>' +
         '<div id="form-buttons-list" class="space-y-1 max-h-[160px] overflow-auto custom-scroll text-xs"></div>' +
-        '<div class="text-[9px] text-slate-500 mt-1">Кнопки сверху формы. Указывай режимы (Insert/Update). Для importExcel маппинг из админки применяется автоматически (без окон и предупреждений).</div>' +
+        '<div class="text-[9px] text-slate-500 mt-1">Кнопки формы и таблицы. Режимы: Insert/Update (в форме), Select (в панели при выборе строки). Для exportExcel: шаблон из C:\\GTerminalPro\\templates + маппинг поле→ячейка. Результат в C:\\GTerminalPro\\exports.</div>' +
         '</div>' +
 
         '<div class="mt-4 bg-slate-800 border border-slate-700 rounded-2xl p-4">' +
@@ -3650,10 +4228,10 @@ function showAdminGuide() {
     },
     {
       category: "Фильтры в окне",
-      title: "Фильтры (операторы выбираются в основном окне)",
-      desc: "В админке только добавляете поля для фильтрации. Оператор (=, LIKE, >, IN и др.) пользователь выбирает прямо в окне перед поиском.",
-      example: "Добавили поле CARD_NUMBER → в окне можно выбрать 'содержит' или '='",
-      keywords: "фильтр filter оператор like in"
+      title: "Фильтры: настраиваемые и кастомные операторы",
+      desc: "В редакторе фильтра (✎) выберите какие стандартные операторы показывать (=, LIKE, IS NULL и др.) и добавьте кастомные SQL-операторы.\n\nКастомный пример:\n• label: closed\n• sql: CloseDate IS NOT NULL\n• needsValue: false\n\nВ выпадающем списке пользователь увидит «closed», а в WHERE попадёт ваш SQL. Можно использовать {field} и {value} в SQL.",
+      example: "Status: custom closed → CloseDate IS NOT NULL; custom open → CloseDate IS NULL",
+      keywords: "фильтр filter оператор like in custom sql is null"
     },
     {
       category: "Поля INSERT / UPDATE ★",
@@ -3948,20 +4526,34 @@ async function autoFillDetailsFromQuery() {
     }
 }
 
+function describeFilterOperators(f) {
+    const stdCount = Array.isArray(f.operators) ? f.operators.length : DEFAULT_FILTER_OPERATORS.length;
+    const customCount = (f.customOperators || []).length;
+    const customLabels = (f.customOperators || []).map(c => c.label).filter(Boolean).join(', ');
+    let text = stdCount + ' станд.';
+    if (customCount) text += ', ' + customCount + ' кастом (' + customLabels + ')';
+    if (f.defaultOperator) text += ', default: ' + f.defaultOperator;
+    return text;
+}
+
 function renderFiltersList() {
     const container = document.getElementById('filters-list');
     if (!container) return;
     const fls = currentWindowConfig.filters || [];
     container.innerHTML = '';
+    if (!fls.length) {
+        container.innerHTML = '<div class="text-slate-500 text-xs p-1">Нет фильтров. Нажми + чтобы добавить.</div>';
+    }
     fls.forEach((f, i) => {
         const div = document.createElement('div');
         div.className = 'bg-slate-800 p-2 rounded-xl border border-slate-700 text-sm flex justify-between items-center';
         div.innerHTML = 
-            '<div>' +
-            '<span class="font-medium">' + (f.title || f.field) + '</span>' +
-            '<span class="text-xs text-violet-400 ml-1">(' + f.field + ')</span>' +
+            '<div class="min-w-0">' +
+            '<div><span class="font-medium">' + (f.title || f.field) + '</span>' +
+            '<span class="text-xs text-violet-400 ml-1">(' + f.field + ')</span></div>' +
+            '<div class="text-[10px] text-slate-500 truncate">' + describeFilterOperators(f) + '</div>' +
             '</div>' +
-            '<div class="flex gap-1">' +
+            '<div class="flex gap-1 flex-shrink-0">' +
             '<button class="px-2 py-0.5 text-xs bg-violet-700 rounded" onclick="editFilter(' + i + ')">✎</button>' +
             '<button class="px-2 py-0.5 text-xs bg-red-700 rounded" onclick="deleteFilter(' + i + ')">×</button>' +
             '</div>';
@@ -3970,27 +4562,199 @@ function renderFiltersList() {
     if (typeof renderUnifiedFieldsList === 'function') renderUnifiedFieldsList();
 }
 
-async function addFilter() {
-    const field = await customPrompt('Поле для фильтра (из БД):', '');
-    if (!field) return;
-    const title = await customPrompt('Название фильтра:', field);
-    if (!currentWindowConfig.filters) currentWindowConfig.filters = [];
-    if (!currentWindowConfig.formCustomButtons) currentWindowConfig.formCustomButtons = [];
-    currentWindowConfig.filters.push({
-        field: field.trim(),
-        title: (title || field).trim()
+function showFilterEditorModal(index, isNew) {
+    if (!currentWindowConfig.filters || !currentWindowConfig.filters[index]) return;
+    const filter = currentWindowConfig.filters[index];
+    if (!filter.customOperators) filter.customOperators = [];
+    if (!filter.operators) filter.operators = DEFAULT_FILTER_OPERATORS.slice();
+
+    const modal = document.createElement('div');
+    modal.className = 'fixed inset-0 bg-black/85 flex items-center justify-center z-[999] p-4';
+    modal.innerHTML = `
+      <div class="bg-slate-800 border border-slate-600 rounded-2xl w-full max-w-2xl p-5 max-h-[90vh] overflow-auto">
+        <div class="font-semibold mb-3">Редактор фильтра</div>
+        <div class="grid grid-cols-2 gap-3 text-sm mb-4">
+          <div>
+            <label class="block text-xs text-slate-400 mb-1">Поле (из БД)</label>
+            <input id="fe-field" value="${(filter.field || '').replace(/"/g, '&quot;')}" class="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1.5">
+          </div>
+          <div>
+            <label class="block text-xs text-slate-400 mb-1">Название в окне</label>
+            <input id="fe-title" value="${(filter.title || filter.field || '').replace(/"/g, '&quot;')}" class="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1.5">
+          </div>
+        </div>
+
+        <div class="mb-4">
+          <div class="text-xs font-semibold text-violet-300 mb-2">Стандартные операторы (что показывать в списке)</div>
+          <div id="fe-std-ops" class="grid grid-cols-2 gap-1 text-xs"></div>
+        </div>
+
+        <div class="mb-4">
+          <div class="flex justify-between items-center mb-2">
+            <div class="text-xs font-semibold text-emerald-300">Кастомные операторы (SQL)</div>
+            <button id="fe-add-custom" type="button" class="bg-emerald-700 hover:bg-emerald-600 px-2 py-0.5 rounded text-[10px]">+ Добавить</button>
+          </div>
+          <div id="fe-custom-list" class="space-y-2"></div>
+          <div class="text-[10px] text-slate-500 mt-1">Пример: label <b>closed</b>, sql <b>CloseDate IS NOT NULL</b>. Можно {field} и {value}. Если needsValue=true — поле значения обязательно.</div>
+        </div>
+
+        <div class="mb-2">
+          <label class="block text-xs text-slate-400 mb-1">Оператор по умолчанию</label>
+          <select id="fe-default-op" class="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1.5 text-sm"></select>
+        </div>
+
+        <div class="mt-4 flex gap-2">
+          <button id="fe-save" class="flex-1 bg-emerald-600 hover:bg-emerald-500 px-3 py-1.5 rounded">Сохранить</button>
+          <button id="fe-cancel" class="flex-1 bg-slate-700 hover:bg-slate-600 px-3 py-1.5 rounded">Отмена</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+
+    const stdContainer = modal.querySelector('#fe-std-ops');
+    Object.keys(FILTER_OPERATOR_CATALOG).forEach(opKey => {
+        const def = FILTER_OPERATOR_CATALOG[opKey];
+        const checked = filter.operators.includes(opKey) ? 'checked' : '';
+        const row = document.createElement('label');
+        row.className = 'flex items-center gap-2 bg-slate-900 border border-slate-700 rounded px-2 py-1 cursor-pointer';
+        row.innerHTML = `<input type="checkbox" class="fe-std-op" value="${opKey}" ${checked}> <span>${def.label}</span>`;
+        stdContainer.appendChild(row);
     });
-    renderFiltersList();
+
+    function rebuildDefaultOptions() {
+        const draft = collectDraftFilter();
+        const options = getFilterOperatorOptions(draft);
+        const sel = modal.querySelector('#fe-default-op');
+        const current = filter.defaultOperator || '';
+        sel.innerHTML = options.map(op => {
+            const selected = (resolveFilterDefaultOperatorValue({ defaultOperator: current }, options) === op.value) ? 'selected' : '';
+            return `<option value="${op.value}" ${selected}>${op.label}</option>`;
+        }).join('');
+    }
+
+    function renderCustomRows() {
+        const list = modal.querySelector('#fe-custom-list');
+        list.innerHTML = '';
+        (filter.customOperators || []).forEach((custom, idx) => {
+            const row = document.createElement('div');
+            row.className = 'bg-slate-900 border border-slate-700 rounded p-2 grid grid-cols-12 gap-2 items-center';
+            row.innerHTML = `
+              <input data-custom-label="${idx}" value="${(custom.label || '').replace(/"/g, '&quot;')}" placeholder="label (closed)" class="col-span-2 bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs">
+              <input data-custom-sql="${idx}" value="${(custom.sql || '').replace(/"/g, '&quot;')}" placeholder="SQL (CloseDate IS NOT NULL)" class="col-span-8 bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs font-mono">
+              <label class="col-span-1 flex items-center gap-1 text-[10px]"><input type="checkbox" data-custom-needs="${idx}" ${custom.needsValue ? 'checked' : ''}> val</label>
+              <button type="button" data-custom-del="${idx}" class="col-span-1 bg-red-700 hover:bg-red-600 rounded px-1 py-1 text-xs">×</button>
+            `;
+            list.appendChild(row);
+        });
+        rebuildDefaultOptions();
+    }
+
+    function collectDraftFilter() {
+        const stdOps = Array.from(modal.querySelectorAll('.fe-std-op:checked')).map(el => el.value);
+        const customOperators = (filter.customOperators || []).map((custom, idx) => {
+            const labelEl = modal.querySelector('[data-custom-label="' + idx + '"]');
+            const sqlEl = modal.querySelector('[data-custom-sql="' + idx + '"]');
+            const needsEl = modal.querySelector('[data-custom-needs="' + idx + '"]');
+            return {
+                label: labelEl ? labelEl.value.trim() : (custom.label || ''),
+                sql: sqlEl ? sqlEl.value.trim() : (custom.sql || ''),
+                needsValue: needsEl ? needsEl.checked : !!custom.needsValue
+            };
+        }).filter(c => c.label || c.sql);
+        return {
+            field: filter.field,
+            title: filter.title,
+            operators: stdOps.length ? stdOps : DEFAULT_FILTER_OPERATORS.slice(),
+            customOperators,
+            defaultOperator: modal.querySelector('#fe-default-op') ? modal.querySelector('#fe-default-op').value : ''
+        };
+    }
+
+    modal.querySelector('#fe-add-custom').onclick = () => {
+        filter.customOperators.push({ label: '', sql: '', needsValue: false });
+        renderCustomRows();
+    };
+
+    modal.querySelector('#fe-custom-list').addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-custom-del]');
+        if (!btn) return;
+        const idx = parseInt(btn.getAttribute('data-custom-del'), 10);
+        filter.customOperators.splice(idx, 1);
+        renderCustomRows();
+    });
+
+    modal.querySelector('#fe-custom-list').addEventListener('input', rebuildDefaultOptions);
+    stdContainer.addEventListener('change', rebuildDefaultOptions);
+
+    renderCustomRows();
+
+    modal.querySelector('#fe-cancel').onclick = () => {
+        if (isNew) currentWindowConfig.filters.splice(index, 1);
+        modal.remove();
+        renderFiltersList();
+    };
+
+    modal.querySelector('#fe-save').onclick = () => {
+        const field = modal.querySelector('#fe-field').value.trim();
+        const title = modal.querySelector('#fe-title').value.trim();
+        if (!field) {
+            showToast('Укажите поле фильтра', 'error');
+            return;
+        }
+
+        const stdOps = Array.from(modal.querySelectorAll('.fe-std-op:checked')).map(el => el.value);
+        const customOperators = (filter.customOperators || []).map((custom, idx) => {
+            const labelEl = modal.querySelector('[data-custom-label="' + idx + '"]');
+            const sqlEl = modal.querySelector('[data-custom-sql="' + idx + '"]');
+            const needsEl = modal.querySelector('[data-custom-needs="' + idx + '"]');
+            return {
+                label: labelEl ? labelEl.value.trim() : '',
+                sql: sqlEl ? sqlEl.value.trim() : '',
+                needsValue: needsEl ? needsEl.checked : false
+            };
+        }).filter(c => c.label && c.sql);
+
+        const defaultSel = modal.querySelector('#fe-default-op');
+        const defaultOperator = defaultSel ? defaultSel.value : '';
+
+        filter.field = field;
+        filter.title = title || field;
+        if (!stdOps.length && customOperators.length) {
+            filter.operators = [];
+        } else if (stdOps.length === Object.keys(FILTER_OPERATOR_CATALOG).length) {
+            delete filter.operators;
+        } else if (stdOps.length) {
+            filter.operators = stdOps;
+        } else {
+            delete filter.operators;
+        }
+
+        if (customOperators.length) filter.customOperators = customOperators;
+        else delete filter.customOperators;
+
+        if (defaultOperator) filter.defaultOperator = defaultOperator;
+        else delete filter.defaultOperator;
+
+        modal.remove();
+        renderFiltersList();
+        showToast('Фильтр сохранён');
+    };
 }
 
-async function editFilter(index) {
+async function addFilter() {
+    if (!currentWindowConfig.filters) currentWindowConfig.filters = [];
+    currentWindowConfig.filters.push({
+        field: '',
+        title: '',
+        operators: DEFAULT_FILTER_OPERATORS.slice(),
+        customOperators: []
+    });
+    showFilterEditorModal(currentWindowConfig.filters.length - 1, true);
+}
+
+function editFilter(index) {
     if (!currentWindowConfig.filters || !currentWindowConfig.filters[index]) return;
-    const f = currentWindowConfig.filters[index];
-    const newField = await customPrompt('Поле:', f.field);
-    const newTitle = await customPrompt('Название фильтра:', f.title || f.field);
-    if (newField !== null) f.field = newField.trim();
-    if (newTitle !== null) f.title = newTitle.trim();
-    renderFiltersList();
+    showFilterEditorModal(index, false);
 }
 
 async function deleteFilter(index) {
@@ -4020,7 +4784,7 @@ function renderFormButtonsList() {
     div.innerHTML = `
       <div class="flex-1">
         <div><span class="font-semibold">${btn.label}</span> <span class="text-orange-400">(${btn.action})</span> <span class="text-[9px] text-slate-500">[${posText}] [${modesText}]</span></div>
-        <div class="text-[9px] text-slate-400 mt-0.5">${btn.set ? 'set: ' + (Array.isArray(btn.set) ? btn.set.map(s => s.field + '=' + (s.valueType||'val')).join(', ') : JSON.stringify(btn.set)).slice(0,70) : ''}${btn.saveAfter ? ' [auto-save]' : ''} ${btn.defaultCellMapping ? 'cells: ' + JSON.stringify(btn.defaultCellMapping).slice(0,40) : ''} ${stylePreview}</div>
+        <div class="text-[9px] text-slate-400 mt-0.5">${btn.set ? 'set: ' + (Array.isArray(btn.set) ? btn.set.map(s => s.field + '=' + (s.valueType||'val')).join(', ') : JSON.stringify(btn.set)).slice(0,70) : ''}${btn.saveAfter ? ' [auto-save]' : ''} ${btn.templateFile ? 'tpl: ' + btn.templateFile + ' ' : ''}${btn.defaultCellMapping ? 'cells: ' + JSON.stringify(btn.defaultCellMapping).slice(0,40) : ''} ${btn.errorMessage ? '⚠ ' + btn.errorMessage.slice(0,30) : ''} ${btn.successMessage ? '✓ ' + btn.successMessage.slice(0,30) : ''} ${stylePreview}</div>
       </div>
       <div class="flex gap-1 text-[10px]">
         <button class="px-1.5 bg-emerald-700 rounded" onclick="editFormButton(${i})">✎</button>
@@ -4055,7 +4819,9 @@ function showButtonEditor(existingBtn, onSave) {
     style: { bg: '#0ea5e9', color: '#fff', width: 'auto', height: 'auto' },
     defaultCellMapping: {},
     set: [],
-    modes: ['insert', 'update']
+    modes: ['insert', 'update'],
+    errorMessage: '',
+    successMessage: ''
   };
 
   const modal = document.createElement('div');
@@ -4106,8 +4872,29 @@ function showButtonEditor(existingBtn, onSave) {
               <input type="checkbox" id="btn-mode-delete" class="accent-emerald-500">
               <span>Delete</span>
             </label>
+            <label class="flex items-center gap-1.5 cursor-pointer">
+              <input type="checkbox" id="btn-mode-select" class="accent-emerald-500">
+              <span>Select (при выборе строки в таблице — кнопка в панели окна)</span>
+            </label>
           </div>
-          <div class="text-[9px] text-slate-500 mt-1">Пример: если выбрать только Update — кнопка появится только при редактировании, а не при создании новой.</div>
+          <div class="text-[9px] text-slate-500 mt-1">Insert/Update — кнопка в форме. Select — в главном окне после выбора строки (удобно для выгрузки в Excel без открытия формы).</div>
+        </div>
+
+        <!-- Сообщения при выполнении кнопки -->
+        <div class="border border-slate-700 rounded-xl p-3 bg-slate-950/60 space-y-3">
+          <div class="text-xs font-semibold text-slate-300">Сообщения при выполнении</div>
+
+          <div>
+            <label class="block text-xs text-slate-400 mb-1">При ошибке</label>
+            <input id="btn-error-message" value="${(btn.errorMessage || btn.error || '').replace(/"/g, '&quot;')}" placeholder="Например: Не удалось загрузить данные из файла" class="w-full bg-slate-900 border border-slate-600 rounded px-3 py-1.5 text-sm">
+            <div class="text-[9px] text-slate-500 mt-0.5">Если оставить пустым — будет стандартное сообщение об ошибке.</div>
+          </div>
+
+          <div>
+            <label class="block text-xs text-slate-400 mb-1">При успехе</label>
+            <input id="btn-success-message" value="${(btn.successMessage || '').replace(/"/g, '&quot;')}" placeholder="Например: Данные успешно загружены из Excel" class="w-full bg-slate-900 border border-slate-600 rounded px-3 py-1.5 text-sm">
+            <div class="text-[9px] text-slate-500 mt-0.5">Если оставить пустым — будет стандартное сообщение об успехе.</div>
+          </div>
         </div>
 
         <!-- Стиль -->
@@ -4154,6 +4941,7 @@ function showButtonEditor(existingBtn, onSave) {
   const modeInsert = modal.querySelector('#btn-mode-insert');
   const modeUpdate = modal.querySelector('#btn-mode-update');
   const modeDelete = modal.querySelector('#btn-mode-delete');
+  const modeSelect = modal.querySelector('#btn-mode-select');
 
   // Set initial values
   actionSel.value = btn.action || 'importExcel';
@@ -4164,46 +4952,94 @@ function showButtonEditor(existingBtn, onSave) {
   if (modeInsert) modeInsert.checked = initialModes.includes('insert');
   if (modeUpdate) modeUpdate.checked = initialModes.includes('update');
   if (modeDelete) modeDelete.checked = initialModes.includes('delete');
+  if (modeSelect) modeSelect.checked = initialModes.includes('select');
 
   function renderConfigArea() {
     configArea.innerHTML = '';
     const act = actionSel.value;
 
     if (act === 'importExcel' || act === 'exportExcel') {
-      // Dynamic list of field -> cell/column mapping - now supports adding MANY distinct mappings reliably
-      const isCell = act === 'importExcel'; // for import use cells like A2, for export columns or cells
+      const isExport = act === 'exportExcel';
+      let html = '';
 
-      let html = `
-        <div class="text-xs font-semibold mb-1.5">${isCell ? 'Маппинг: Поле формы → Ячейка Excel (A2, B5 и т.д.)' : 'Маппинг: Поле формы → Колонка/ячейка в Excel'}</div>
+      if (isExport) {
+        html += `
+          <div class="text-xs font-semibold text-emerald-300 mb-2">Шаблон Excel для выгрузки</div>
+          <div class="grid grid-cols-1 gap-2 mb-3 text-xs">
+            <div>
+              <label class="block text-slate-400 mb-0.5">Папка шаблонов</label>
+              <input id="exp-template-dir" value="${(btn.templateDir || 'C:\\\\GTerminalPro\\\\templates').replace(/"/g, '&quot;')}" class="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1.5 font-mono text-[11px]" placeholder="C:\\GTerminalPro\\templates">
+            </div>
+            <div class="flex gap-2 items-end">
+              <div class="flex-1">
+                <label class="block text-slate-400 mb-0.5">Файл шаблона (.xlsx)</label>
+                <input id="exp-template-file" value="${(btn.templateFile || btn.template || '').replace(/"/g, '&quot;')}" class="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1.5 font-mono text-[11px]" placeholder="merchant_template.xlsx">
+              </div>
+              <button type="button" id="exp-browse-template" class="px-2 py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-[10px] whitespace-nowrap">Обзор...</button>
+            </div>
+            <div>
+              <label class="block text-slate-400 mb-0.5">Имя выходного файла (в C:\\GTerminalPro\\exports)</label>
+              <input id="exp-output-name" value="${(btn.outputFilename || '').replace(/"/g, '&quot;')}" class="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1.5 font-mono text-[11px]" placeholder="export_{TerminalID}.xlsx">
+              <div class="text-[9px] text-slate-500 mt-0.5">Можно {TerminalID}, {MerchantID} — подставятся из данных строки/формы.</div>
+            </div>
+          </div>
+        `;
+      }
+
+      html += `
+        <div class="text-xs font-semibold mb-1.5">Маппинг: Поле → Ячейка Excel (A2, B5 и т.д.)</div>
         <div id="mapping-rows" class="space-y-1 mb-2 max-h-[200px] overflow-auto custom-scroll p-1 border border-slate-800 rounded"></div>
         <button id="add-map-row" class="text-xs px-2 py-1 bg-orange-600 hover:bg-orange-500 rounded">+ Добавить поле для маппинга</button>
-        <div class="text-[10px] text-slate-500 mt-1">Если здесь задать маппинг — данные применятся полностью автоматически при клике на кнопку (никаких окон и алертов). Если не задать — кнопка просто ничего не сделает.</div>
+        <div class="text-[10px] text-slate-500 mt-1">${isExport ? 'Данные из формы или выбранной строки запишутся в указанные ячейки шаблона и сохранятся в exports.' : 'При клике данные из ячеек Excel автоматически заполнят поля формы.'}</div>
       `;
       configArea.innerHTML = html;
+
+      if (isExport) {
+        const browseBtn = configArea.querySelector('#exp-browse-template');
+        if (browseBtn) {
+          browseBtn.onclick = async () => {
+            const dirInp = configArea.querySelector('#exp-template-dir');
+            const fileInp = configArea.querySelector('#exp-template-file');
+            const picked = await window.electronAPI.selectFile({
+              defaultPath: (dirInp && dirInp.value) || 'C:\\GTerminalPro\\templates',
+              filters: [{ name: 'Excel', extensions: ['xlsx', 'xls'] }]
+            });
+            if (!picked) return;
+            const parts = picked.replace(/\\/g, '/').split('/');
+            const fname = parts.pop();
+            if (fileInp) fileInp.value = fname || picked;
+            if (dirInp && parts.length) dirInp.value = parts.join('\\');
+          };
+        }
+      }
 
       const rowsContainer = configArea.querySelector('#mapping-rows');
       const addBtn = configArea.querySelector('#add-map-row');
 
-      // Ensure the right map object exists and is an object (not array etc)
-      if (act === 'importExcel') {
-        if (!btn.defaultCellMapping || typeof btn.defaultCellMapping !== 'object') btn.defaultCellMapping = {};
-      } else {
-        if (!btn.mapping || typeof btn.mapping !== 'object') btn.mapping = {};
+      if (!btn.defaultCellMapping || typeof btn.defaultCellMapping !== 'object') {
+        btn.defaultCellMapping = (btn.mapping && typeof btn.mapping === 'object') ? { ...btn.mapping } : {};
       }
-      let currentMap = (act === 'importExcel' ? btn.defaultCellMapping : btn.mapping);
+      let currentMap = btn.defaultCellMapping;
 
       function getUsedFields() {
         return Object.keys(currentMap || {});
       }
 
+      function getWindowFieldsForMapping() {
+        const fromFields = (currentWindowConfig.fields || []).filter(f => !f.hiddenInForm);
+        if (fromFields.length) return fromFields;
+        const grid = currentWindowConfig.grid || [];
+        return grid.map(c => ({ field: c.field, title: c.title || c.field }));
+      }
+
       function getAvailForAdd() {
         const used = new Set(getUsedFields());
-        return (currentWindowConfig.fields || []).filter(f => !f.hiddenInForm && !used.has(f.field));
+        return getWindowFieldsForMapping().filter(f => !used.has(f.field));
       }
 
       function getOptionsForRow(currentField) {
         const used = new Set(getUsedFields());
-        const all = (currentWindowConfig.fields || []).filter(f => !f.hiddenInForm);
+        const all = getWindowFieldsForMapping();
         const opts = [];
         // always include the current one for this row
         all.forEach(f => {
@@ -4219,11 +5055,8 @@ function showButtonEditor(existingBtn, onSave) {
       }
 
       function syncBtnMap() {
-        if (act === 'importExcel') {
-          btn.defaultCellMapping = currentMap;
-        } else {
-          btn.mapping = currentMap;
-        }
+        btn.defaultCellMapping = currentMap;
+        if (isExport) btn.mapping = { ...currentMap };
       }
 
       function renderRows() {
@@ -4236,7 +5069,7 @@ function showButtonEditor(existingBtn, onSave) {
           row.className = 'flex gap-2 items-center bg-slate-900 border border-slate-700 rounded p-1';
           row.innerHTML = `
             <select class="map-field bg-slate-800 border border-slate-600 rounded px-1 py-0.5 text-xs flex-1"></select>
-            <input class="map-cell bg-slate-800 border border-slate-600 rounded px-1 py-0.5 text-xs font-mono w-20" value="${cell}" placeholder="${isCell ? 'A2' : 'Col'}">
+            <input class="map-cell bg-slate-800 border border-slate-600 rounded px-1 py-0.5 text-xs font-mono w-20" value="${cell}" placeholder="A2">
             <button class="text-red-400 hover:text-red-500 px-1 text-sm" title="Удалить">×</button>
           `;
 
@@ -4292,7 +5125,7 @@ function showButtonEditor(existingBtn, onSave) {
           return;
         }
         const nextField = unused[0].field;
-        currentMap[nextField] = isCell ? 'A1' : nextField;  // sensible default
+        currentMap[nextField] = 'A1';
         syncBtnMap();
         renderRows();
       };
@@ -4551,14 +5384,43 @@ function showButtonEditor(existingBtn, onSave) {
     if (modeInsert && modeInsert.checked) btn.modes.push('insert');
     if (modeUpdate && modeUpdate.checked) btn.modes.push('update');
     if (modeDelete && modeDelete.checked) btn.modes.push('delete');
+    if (modeSelect && modeSelect.checked) btn.modes.push('select');
     if (btn.modes.length === 0) {
-      btn.modes = ['insert', 'update']; // безопасный дефолт
+      btn.modes = ['insert', 'update'];
     }
 
-    // action-specific already updated live in btn object via listeners
+    if (actionSel.value === 'exportExcel') {
+      const tDir = configArea.querySelector('#exp-template-dir');
+      const tFile = configArea.querySelector('#exp-template-file');
+      const outName = configArea.querySelector('#exp-output-name');
+      const td = tDir ? tDir.value.trim() : '';
+      const tf = tFile ? tFile.value.trim() : '';
+      const on = outName ? outName.value.trim() : '';
+      if (td) btn.templateDir = td; else delete btn.templateDir;
+      if (tf) btn.templateFile = tf; else delete btn.templateFile;
+      if (on) btn.outputFilename = on; else delete btn.outputFilename;
+      delete btn.templatePath;
+      if (btn.defaultCellMapping) btn.mapping = { ...btn.defaultCellMapping };
+    }
+
     if (actionSel.value === 'setFields') {
       const chk = configArea.querySelector('#set-save-after');
       if (chk) btn.saveAfter = chk.checked;
+    }
+
+    // custom error message
+    const errInp = modal.querySelector('#btn-error-message');
+    if (errInp) {
+      const em = errInp.value.trim();
+      if (em) btn.errorMessage = em; else delete btn.errorMessage;
+      delete btn.error; // legacy cleanup
+    }
+
+    // custom success message
+    const succInp = modal.querySelector('#btn-success-message');
+    if (succInp) {
+      const sm = succInp.value.trim();
+      if (sm) btn.successMessage = sm; else delete btn.successMessage;
     }
 
     onSave(btn);
@@ -4798,9 +5660,12 @@ async function addNewWindow() {
 }
 
 function refreshWindowList() {
+    console.log('[REFRESH] === refreshWindowList called ===');
     const list = document.getElementById('window-list');
-    if (!list || !fullConfig) return;
+    console.log('[REFRESH] #window-list element found?', !!list);
+    if (!list || !fullConfig) { console.warn('[REFRESH] no list or no fullConfig'); return; }
     if (!fullConfig.windows) fullConfig.windows = [];
+    console.log('[REFRESH] fullConfig has', fullConfig.windows.length, 'windows');
     list.innerHTML = '';
 
     const currentWinId = currentWindowConfig ? String(currentWindowConfig.id || currentWindowConfig.windowId || currentWindowConfig.title) : null;
@@ -4810,13 +5675,38 @@ function refreshWindowList() {
       ? String(currentUser.windowsAccess).split(',').map(s => s.trim()).filter(Boolean)
       : null;
 
-    const visibleWindows = fullConfig.windows.filter(win => {
+    const roleStr = String(currentUser && (currentUser.role || currentUser.ROLE) || '').toUpperCase();
+    const isAdmin = currentUser && (roleStr === 'ADMIN' || (currentUser.login || currentUser.LOGIN || '').toLowerCase() === 'admin');
+    console.log('[REFRESH] currentUser:', currentUser ? {login: currentUser.login || currentUser.LOGIN, role: currentUser.role || currentUser.ROLE} : null);
+    console.log('[REFRESH] isAdmin calc:', isAdmin, 'allowed:', allowed);
+    let visibleWindows = fullConfig.windows.filter(win => {
       const wid = String(win.id || win.windowId || win.title);
+      if (isAdmin) return true;
       if (!allowed || allowed.length === 0) return true;
-      if (currentUser && currentUser.role === 'ADMIN') return true;
       return allowed.includes(wid);
     });
+    console.log('[REFRESH] after filter visible count=', visibleWindows.length, 'ids:', visibleWindows.map(w => w.id || w.title));
 
+    // Safety: if login is admin, always show all windows (to guarantee display)
+    const loginName = (currentUser && (currentUser.login || currentUser.LOGIN || '')).toLowerCase();
+    if (loginName === 'admin' && visibleWindows.length < (fullConfig.windows || []).length) {
+      console.warn('[REFRESH] forcing all windows because login is admin');
+      visibleWindows = (fullConfig.windows || []).slice();
+    }
+
+    // Safety: if for some reason 0 but we have windows and isAdmin, force show (to guarantee list)
+    if (visibleWindows.length === 0 && fullConfig.windows.length > 0 && isAdmin) {
+      console.warn('[REFRESH] forcing show all windows for admin');
+      visibleWindows = fullConfig.windows.slice();
+    }
+
+    // Ultimate safety: if still no visible windows but config has them, force show all (logged in user should see the configured windows)
+    if (visibleWindows.length === 0 && fullConfig.windows && fullConfig.windows.length > 0 && currentUser) {
+      console.warn('[REFRESH] ultimate force: showing all windows for logged user');
+      visibleWindows = fullConfig.windows.slice();
+    }
+
+    console.log('[REFRESH] will append', visibleWindows.length, 'buttons. sidebarCollapsed=', sidebarCollapsed);
     visibleWindows.forEach((win) => {
         const winId = String(win.id || win.windowId || win.title);
         const isActive = currentWinId && winId === currentWinId;
@@ -4849,9 +5739,10 @@ function refreshWindowList() {
 
         list.appendChild(btn);
     });
+    console.log('[REFRESH] appended', list.children.length, 'children to #window-list');
 
     // Admin button (always full text or icon based on collapsed)
-    if (currentUser && currentUser.role === 'ADMIN') {
+    if (isAdmin) {
         const adminBtn = document.createElement('button');
         adminBtn.dataset.role = 'admin';
         if (sidebarCollapsed) {
@@ -4868,6 +5759,10 @@ function refreshWindowList() {
             if (window.openAdminWindow) window.openAdminWindow();
         };
         list.appendChild(adminBtn);
+    }
+
+    if (list.children.length === 0 && fullConfig.windows && fullConfig.windows.length > 0) {
+      console.warn('[REFRESH] list still empty after forces, something wrong with DOM or buttons');
     }
 }
 
@@ -5783,6 +6678,9 @@ async function openFieldEditor(field, onSave, siblingFields = []) {
               <option value="pattern">pattern (regex)</option>
               <option value="unique">unique — запрос в БД</option>
               <option value="custom">custom query check</option>
+              <option value="uppercase">uppercase — только верхний регистр</option>
+              <option value="lowercase">lowercase — только нижний регистр</option>
+              <option value="trim">trim — нет пробелов в начале/конце</option>
             </select>
             <button id="val-apply" class="px-3 bg-amber-600 rounded text-xs">Обновить</button>
           </div>
@@ -5799,14 +6697,15 @@ async function openFieldEditor(field, onSave, siblingFields = []) {
       function showValParams() {
         params.innerHTML = '';
         const t = vtype.value;
+        let paramsHtml = '';
         if (t === 'length') {
-          params.innerHTML = `<input placeholder="min" id="p-min" value="${v.min||''}" class="bg-slate-800 px-1 rounded"> <input placeholder="max" id="p-max" value="${v.max||''}" class="bg-slate-800 px-1 rounded"> <input placeholder="exact" id="p-exact" value="${v.exact||''}" class="bg-slate-800 px-1 rounded">`;
+          paramsHtml = `<input placeholder="min" id="p-min" value="${v.min||''}" class="bg-slate-800 px-1 rounded"> <input placeholder="max" id="p-max" value="${v.max||''}" class="bg-slate-800 px-1 rounded"> <input placeholder="exact" id="p-exact" value="${v.exact||''}" class="bg-slate-800 px-1 rounded">`;
         } else if (t === 'minmax') {
-          params.innerHTML = `<input placeholder="min" id="p-min" value="${v.min||''}" class="bg-slate-800 px-1 rounded"> <input placeholder="max" id="p-max" value="${v.max||''}" class="bg-slate-800 px-1 rounded">`;
+          paramsHtml = `<input placeholder="min" id="p-min" value="${v.min||''}" class="bg-slate-800 px-1 rounded"> <input placeholder="max" id="p-max" value="${v.max||''}" class="bg-slate-800 px-1 rounded">`;
         } else if (t === 'position') {
-          params.innerHTML = `<input placeholder="start (1-based)" id="p-start" value="${v.start||1}" class="bg-slate-800 px-1 rounded"> <input placeholder="длина" id="p-len" value="${v.length||''}" class="bg-slate-800 px-1 rounded"> <input placeholder="ожидаемое значение" id="p-val" value="${v.value||''}" class="bg-slate-800 px-1 rounded">`;
+          paramsHtml = `<input placeholder="start (1-based)" id="p-start" value="${v.start||1}" class="bg-slate-800 px-1 rounded"> <input placeholder="длина" id="p-len" value="${v.length||''}" class="bg-slate-800 px-1 rounded"> <input placeholder="ожидаемое значение" id="p-val" value="${v.value||''}" class="bg-slate-800 px-1 rounded">`;
         } else if (t === 'language') {
-          params.innerHTML = `
+          paramsHtml = `
             <select id="p-lang" class="bg-slate-800 px-1 rounded w-full">
               <option value="armenian">armenian</option>
               <option value="armenian_alphanumeric">armenian + digits + symbols</option>
@@ -5816,33 +6715,19 @@ async function openFieldEditor(field, onSave, siblingFields = []) {
               <option value="cyrillic_alphanumeric">cyrillic + digits + symbols</option>
               <option value="digits">digits</option>
               <option value="alphanumeric">latin letters + digits</option>
-            </select>
-            <input id="p-err" placeholder="Сообщение об ошибке (опц) - your custom text here" value="${v.error || ''}" class="bg-slate-800 px-1 rounded w-full mt-1">`;
-          setTimeout(() => {
-            const langSel = featureArea.querySelector('#p-lang');
-            const errIn = featureArea.querySelector('#p-err');
-            if (langSel && v.language) langSel.value = v.language;
-            if (errIn && v.error) errIn.value = v.error;
-          }, 0);
-        } else if (t === 'pattern' || t === 'unique' || t === 'custom') {
-          if (t === 'custom') {
-            params.innerHTML = `
-              <input id="p-cond" placeholder="if условие, напр. value > 1" value="${v.condition || ''}" class="bg-slate-800 px-1 rounded">
-              <input id="p-pattern" placeholder="SQL с ? (опционально)" value="${v.query || ''}" class="bg-slate-800 px-1 rounded">
-              <input id="p-err" placeholder="Сообщение об ошибке (обяз.)" value="${v.error || ''}" class="bg-slate-800 px-1 rounded col-span-3">
-            `;
-          } else if (t === 'unique') {
-            params.innerHTML = `
-              <input id="p-pattern" placeholder="SQL с ? , напр. SELECT 1 FROM t WHERE tid=? AND mid=?" value="${v.query || ''}" class="bg-slate-800 px-1 rounded col-span-2">
-              <input id="p-fields" placeholder="поля comma: TerminalID,MerchantID" value="${(v.fields||[]).join(',')}" class="bg-slate-800 px-1 rounded">
-              <input id="p-err" placeholder="Сообщение об ошибке (обяз.)" value="${v.error || ''}" class="bg-slate-800 px-1 rounded col-span-3">
-            `;
-          } else {
-            params.innerHTML = `<input id="p-pattern" placeholder="${t==='pattern'?'regex': 'SQL с ?'}" value="${v.pattern || v.query || ''}" class="bg-slate-800 px-1 rounded col-span-2">
-              <input id="p-err" placeholder="Сообщение об ошибке (опц)" value="${v.error || ''}" class="bg-slate-800 px-1 rounded col-span-3">`;
-          }
+            </select>`;
+        } else if (t === 'pattern') {
+          paramsHtml = `<input id="p-pattern" placeholder="regex" value="${v.pattern || ''}" class="bg-slate-800 px-1 rounded">`;
+        } else if (t === 'unique') {
+          paramsHtml = `<input id="p-pattern" placeholder="SQL с ?" value="${v.query || ''}" class="bg-slate-800 px-1 rounded"> <input id="p-fields" placeholder="поля" value="${(v.fields||[]).join(',')}" class="bg-slate-800 px-1 rounded">`;
+        } else if (t === 'custom') {
+          paramsHtml = `<input id="p-cond" placeholder="if условие" value="${v.condition || ''}" class="bg-slate-800 px-1 rounded"> <input id="p-pattern" placeholder="SQL опц" value="${v.query || ''}" class="bg-slate-800 px-1 rounded">`;
+        } else if (t === 'uppercase' || t === 'lowercase' || t === 'trim') {
+          paramsHtml = '';
         }
+        params.innerHTML = paramsHtml + `<input id="p-err" placeholder="Текст ошибки (ОБЯЗАТЕЛЬНО, ваш кастомный)" value="${v.error || ''}" class="bg-slate-800 px-1 rounded w-full mt-1">`;
       }
+
       vtype.onchange = showValParams;
       showValParams();
 
@@ -5884,16 +6769,16 @@ async function openFieldEditor(field, onSave, siblingFields = []) {
           nv.condition = get('p-cond');
           nv.query = get('p-pattern');
         }
+        if (nv.type === 'uppercase' || nv.type === 'lowercase' || nv.type === 'trim') {
+          // no extra params
+        }
 
         const customErr = get('p-err').trim();
-        if (customErr) {
-          nv.error = customErr;
-        } else {
-          delete nv.error;
+        if (!customErr) {
+          alert('Нужно обязательно прописать свой кастомный текст ошибки!');
+          return;
         }
-        if (!nv.error && (nv.type === 'unique' || nv.type === 'custom')) {
-          nv.error = 'Ошибка валидации';
-        }
+        nv.error = customErr;
 
         field.validations[idx] = nv;
         featureArea.innerHTML = '';
@@ -5976,6 +6861,9 @@ async function openFieldEditor(field, onSave, siblingFields = []) {
                 <option value="pattern">pattern (regex)</option>
                 <option value="unique">unique — запрос в БД</option>
                 <option value="custom">custom query check</option>
+                <option value="uppercase">uppercase — только верхний регистр</option>
+                <option value="lowercase">lowercase — только нижний регистр</option>
+                <option value="trim">trim — нет пробелов в начале/конце</option>
               </select>
               <button id="val-apply" class="px-3 bg-amber-600 rounded text-xs">Применить</button>
             </div>
@@ -5988,14 +6876,15 @@ async function openFieldEditor(field, onSave, siblingFields = []) {
         function showValParams() {
           params.innerHTML = '';
           const t = vtype.value;
+          let paramsHtml = '';
           if (t === 'length') {
-            params.innerHTML = `<input placeholder="min" id="p-min" class="bg-slate-800 px-1 rounded"> <input placeholder="max" id="p-max" class="bg-slate-800 px-1 rounded"> <input placeholder="exact" id="p-exact" class="bg-slate-800 px-1 rounded">`;
+            paramsHtml = `<input placeholder="min" id="p-min" class="bg-slate-800 px-1 rounded"> <input placeholder="max" id="p-max" class="bg-slate-800 px-1 rounded"> <input placeholder="exact" id="p-exact" class="bg-slate-800 px-1 rounded">`;
           } else if (t === 'minmax') {
-            params.innerHTML = `<input placeholder="min" id="p-min" class="bg-slate-800 px-1 rounded"> <input placeholder="max" id="p-max" class="bg-slate-800 px-1 rounded">`;
+            paramsHtml = `<input placeholder="min" id="p-min" class="bg-slate-800 px-1 rounded"> <input placeholder="max" id="p-max" class="bg-slate-800 px-1 rounded">`;
           } else if (t === 'position') {
-            params.innerHTML = `<input placeholder="start (1-based)" id="p-start" value="1" class="bg-slate-800 px-1 rounded"> <input placeholder="длина" id="p-len" class="bg-slate-800 px-1 rounded"> <input placeholder="ожидаемое значение" id="p-val" class="bg-slate-800 px-1 rounded">`;
+            paramsHtml = `<input placeholder="start (1-based)" id="p-start" value="1" class="bg-slate-800 px-1 rounded"> <input placeholder="длина" id="p-len" class="bg-slate-800 px-1 rounded"> <input placeholder="ожидаемое значение" id="p-val" class="bg-slate-800 px-1 rounded">`;
           } else if (t === 'language') {
-              params.innerHTML = `
+            paramsHtml = `
                 <select id="p-lang" class="bg-slate-800 px-1 rounded w-full">
                     <option value="armenian">armenian</option>
                     <option value="armenian_alphanumeric">armenian + digits + symbols</option>
@@ -6005,26 +6894,17 @@ async function openFieldEditor(field, onSave, siblingFields = []) {
                     <option value="cyrillic_alphanumeric">cyrillic + digits + symbols</option>
                     <option value="digits">digits</option>
                     <option value="alphanumeric">latin letters + digits</option>
-                </select>
-                <input id="p-err" placeholder="Сообщение об ошибке (опц) - your custom text here" class="bg-slate-800 px-1 rounded w-full mt-1">`;
-          }else if (t === 'pattern' || t === 'unique' || t === 'custom') {
-            if (t === 'custom') {
-              params.innerHTML = `
-                <input id="p-cond" placeholder="if условие напр. value > 1" class="bg-slate-800 px-1 rounded">
-                <input id="p-pattern" placeholder="SQL с ? (опц)" class="bg-slate-800 px-1 rounded">
-                <input id="p-err" placeholder="Сообщение об ошибке (обяз.)" class="bg-slate-800 px-1 rounded col-span-3">
-              `;
-            } else if (t === 'unique') {
-              params.innerHTML = `
-                <input id="p-pattern" placeholder="SQL с ? , напр. SELECT 1 FROM t WHERE tid=? AND mid=?" class="bg-slate-800 px-1 rounded col-span-2">
-                <input id="p-fields" placeholder="поля comma: TerminalID,MerchantID" class="bg-slate-800 px-1 rounded">
-                <input id="p-err" placeholder="Сообщение об ошибке (обяз.)" class="bg-slate-800 px-1 rounded col-span-3">
-              `;
-            } else {
-              params.innerHTML = `<input id="p-pattern" placeholder="${t==='pattern'?'regex': 'SQL с ?'}" class="bg-slate-800 px-1 rounded col-span-2">
-                <input id="p-err" placeholder="Сообщение об ошибке (опц)" class="bg-slate-800 px-1 rounded col-span-3">`;
-            }
+                </select>`;
+          } else if (t === 'pattern') {
+            paramsHtml = `<input id="p-pattern" placeholder="regex" class="bg-slate-800 px-1 rounded">`;
+          } else if (t === 'unique') {
+            paramsHtml = `<input id="p-pattern" placeholder="SQL с ?" class="bg-slate-800 px-1 rounded"> <input id="p-fields" placeholder="поля" class="bg-slate-800 px-1 rounded">`;
+          } else if (t === 'custom') {
+            paramsHtml = `<input id="p-cond" placeholder="if условие" class="bg-slate-800 px-1 rounded"> <input id="p-pattern" placeholder="SQL опц" class="bg-slate-800 px-1 rounded">`;
+          } else if (t === 'uppercase' || t === 'lowercase' || t === 'trim') {
+            paramsHtml = '';
           }
+          params.innerHTML = paramsHtml + `<input id="p-err" placeholder="Текст ошибки (ОБЯЗАТЕЛЬНО, ваш кастомный)" class="bg-slate-800 px-1 rounded w-full mt-1">`;
         }
         vtype.onchange = showValParams;
         showValParams();
@@ -6054,15 +6934,15 @@ async function openFieldEditor(field, onSave, siblingFields = []) {
             v.condition = get('p-cond');
             v.query = get('p-pattern');
           }
+          if (v.type === 'uppercase' || v.type === 'lowercase' || v.type === 'trim') {
+            // no params
+          }
           const customErr = get('p-err').trim();
-          if (customErr) {
-            v.error = customErr;
-          } else {
-            delete v.error;
+          if (!customErr) {
+            alert('Нужно обязательно прописать свой кастомный текст ошибки!');
+            return;
           }
-          if (!v.error && (v.type === 'unique' || v.type === 'custom')) {
-            v.error = 'Ошибка валидации';
-          }
+          v.error = customErr;
 
           field.validations.push(v);
           featureArea.innerHTML = '';
@@ -6513,6 +7393,31 @@ async function saveFullConfig() {
                 };
             }
         }
+
+        // Prune empty CRUD sections so read-only windows (no fields / no key) stay clean in saved config
+        // Buttons in main UI now also hide based on real fields/keys (not object presence)
+        if (currentWindowConfig && fullConfig && Array.isArray(fullConfig.windows)) {
+            const idx2 = fullConfig.windows.findIndex(w => 
+                (w.id && currentWindowConfig.id && w.id === currentWindowConfig.id) ||
+                w.title === currentWindowConfig.title
+            );
+            if (idx2 >= 0) {
+                const tw = fullConfig.windows[idx2];
+                if (tw.insert && (!Array.isArray(tw.insert.fields) || tw.insert.fields.length === 0)) {
+                    delete tw.insert;
+                }
+                if (tw.update && (!Array.isArray(tw.update.fields) || tw.update.fields.length === 0)) {
+                    delete tw.update;
+                }
+                if (tw.form && (!Array.isArray(tw.form.fields) || tw.form.fields.length === 0)) {
+                    delete tw.form;
+                }
+                if (tw.delete && !tw.delete.keyField && !tw.delete.table) {
+                    delete tw.delete;
+                }
+            }
+        }
+
         const success = await window.electronAPI.saveConfig(fullConfig);
         if (success) {
             showToast('✅ Конфигурация успешно сохранена!');
@@ -6529,6 +7434,7 @@ function reloadCurrentWindow() {
         if (lw) lw(currentWindowConfig);
     }
 }
+window.reloadCurrentWindow = reloadCurrentWindow;
 
 function updateMasterContextUI() {
     const banner = document.getElementById('master-context-banner');
@@ -6761,41 +7667,67 @@ function toggleConsole() {
 }
 
 // Export helpers using current results
+function parseExportResult(result) {
+    if (result && typeof result === 'object' && 'success' in result) {
+        return result;
+    }
+    if (typeof result === 'string' && result) {
+        return { success: true, path: result };
+    }
+    return { success: false, error: 'Неизвестный ответ экспорта' };
+}
+
 async function exportCurrentCsv() {
-    if (!currentResults || !currentResults.length) { showToast('Нет данных для экспорта', 'error'); return; }
+    if (!currentResults || !currentResults.length) { showToast('Нет данных для экспорта. Сначала выполните поиск.', 'error'); return; }
     const ts = new Date().toISOString().replace(/[:.]/g, '-');
     const fname = (currentWindowConfig && currentWindowConfig.id || 'data') + '_' + ts + '.csv';
     try {
-        const p = await window.electronAPI.exportCsv(currentResults, fname);
-        showToast('CSV сохранён: ' + p);
+        const res = parseExportResult(await window.electronAPI.exportCsv(currentResults, fname));
+        if (res.success) showToast('CSV сохранён: ' + res.path);
+        else showToast('Ошибка экспорта CSV: ' + (res.error || 'неизвестная ошибка'), 'error');
     } catch (e) { showToast('Ошибка экспорта CSV: ' + e.message, 'error'); }
 }
 
 async function exportCurrentXlsx() {
-    if (!currentResults || !currentResults.length) { showToast('Нет данных для экспорта', 'error'); return; }
+    if (!currentResults || !currentResults.length) { showToast('Нет данных для экспорта. Сначала выполните поиск.', 'error'); return; }
     const ts = new Date().toISOString().replace(/[:.]/g, '-');
     const fname = (currentWindowConfig && currentWindowConfig.id || 'data') + '_' + ts + '.xlsx';
     try {
-        const p = await window.electronAPI.exportXlsx(currentResults, fname);
-        showToast('XLSX сохранён: ' + p);
+        const res = parseExportResult(await window.electronAPI.exportXlsx(currentResults, fname));
+        if (res.success) showToast('XLSX сохранён: ' + res.path);
+        else showToast('Ошибка экспорта XLSX: ' + (res.error || 'неизвестная ошибка'), 'error');
     } catch (e) { showToast('Ошибка экспорта XLSX: ' + e.message, 'error'); }
 }
 
-// Make sure everything is attached even if some late error
+// Robust single init trigger (prevents double init on load + DOMContentLoaded in packaged)
 try {
-    window.onload = init;
+  function __startInitOnce() {
+    console.log('[INIT STARTER] __startInitOnce called, alreadyStarted=', !!window.__gtermInitStarted);
+    if (window.__gtermInitStarted) { console.log('[INIT STARTER] skipped, already started'); return; }
+    window.__gtermInitStarted = true;
+    console.log('[INIT STARTER] flag set, will call init');
+    if (typeof init === 'function') {
+      console.log('[INIT STARTER] scheduling init() via Promise');
+      Promise.resolve().then(() => {
+        console.log('[INIT STARTER] Promise fired, calling init()');
+        init().catch(console.error);
+      });
+    }
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', __startInitOnce, { once: true });
+  } else {
+    __startInitOnce();
+  }
+  // Also cover 'load' as last resort (idempotent)
+  window.addEventListener('load', __startInitOnce, { once: true });
 } catch(e) {
-    console.error('Error setting onload', e);
+  console.error('Error wiring init starter', e);
+  // last resort
+  setTimeout(() => { if (typeof init === 'function') init().catch(console.error); }, 0);
 }
 
-// Fallback: also run init on DOMContentLoaded in case onload has issues
-document.addEventListener('DOMContentLoaded', () => {
-    if (typeof init === 'function' && !window.__initCalled) {
-        window.__initCalled = true;
-        // init is async, call it
-        init().catch(console.error);
-    }
-});
+console.log('[RENDERER] renderer.js fully parsed and bottom code executed');
 
 // Ensure critical functions are on global/window even if hoisting had issues from edits
 // This fixes "not defined" errors for loadWindow and admin button clicks
@@ -6847,6 +7779,37 @@ try {
   if (typeof moveInsertFieldDown === 'function') window.moveInsertFieldDown = moveInsertFieldDown;
   if (typeof moveUpdateFieldUp === 'function') window.moveUpdateFieldUp = moveUpdateFieldUp;
   if (typeof moveUpdateFieldDown === 'function') window.moveUpdateFieldDown = moveUpdateFieldDown;
+
+  // Critical for static inline onclick= in index.html (top bar etc). Without these the buttons do nothing or "not defined" after navigation.
+  if (typeof toggleSidebar === 'function') window.toggleSidebar = toggleSidebar;
+  if (typeof reloadCurrentWindow === 'function') window.reloadCurrentWindow = reloadCurrentWindow;
+  if (typeof performSearch === 'function') window.performSearch = performSearch;
+  if (typeof showInsertForm === 'function') window.showInsertForm = showInsertForm;
+  if (typeof showUpdateForm === 'function') window.showUpdateForm = showUpdateForm;
+  if (typeof deleteSelectedRow === 'function') window.deleteSelectedRow = deleteSelectedRow;
+  if (typeof exportCurrentCsv === 'function') window.exportCurrentCsv = exportCurrentCsv;
+  if (typeof exportCurrentXlsx === 'function') window.exportCurrentXlsx = exportCurrentXlsx;
+  if (typeof toggleFilters === 'function') window.toggleFilters = toggleFilters;
+  // logout is assigned inside init as window.logout = ...
+  if (typeof window.logout === 'function') {
+    // already set
+  }
 } catch (e) {
   console.warn('Could not attach some window globals', e);
 }
+
+// Last-resort wiring for the static top-bar buttons (in case init hasn't attached yet or multiple loads)
+function __wireTopBar() {
+  try {
+    const t = document.getElementById('top-toggle-btn');
+    if (t && !t.__wired) { t.__wired = true; t.onclick = () => { if (typeof toggleSidebar === 'function') toggleSidebar(); }; }
+    const r = document.getElementById('reload-btn');
+    if (r && !r.__wired) { r.__wired = true; r.onclick = () => { if (typeof reloadCurrentWindow === 'function') reloadCurrentWindow(); }; }
+  } catch(_) {}
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', __wireTopBar, {once:true});
+} else {
+  __wireTopBar();
+}
+setTimeout(__wireTopBar, 300);

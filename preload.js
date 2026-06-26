@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   executeQuery: (sql, params) => ipcRenderer.invoke('execute-query', sql, params),
   exportCsv: (data, filename) => ipcRenderer.invoke('export-csv', data, filename),
   exportXlsx: (data, filename) => ipcRenderer.invoke('export-xlsx', data, filename),
+  exportXlsxTemplate: (options) => ipcRenderer.invoke('export-xlsx-template', options),
   showDetails: (title, row, config) => ipcRenderer.invoke('show-details', title, row, config),
   login: (login, password) => ipcRenderer.invoke('login', login, password),
   getLookupData: (sql, params) =>
@@ -30,4 +31,5 @@ saveConfig: (config) =>
   selectFile: (options) => ipcRenderer.invoke('select-file', options),
   readExcel: (filePath) => ipcRenderer.invoke('read-excel', filePath),
   readExcelCell: (filePath, cell) => ipcRenderer.invoke('read-excel-cell', filePath, cell),
+  navigateTo: (page) => ipcRenderer.invoke('navigate-to', page),
 });

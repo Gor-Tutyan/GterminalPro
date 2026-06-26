@@ -8,15 +8,22 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.6.0/css/all.min.css">
   <link rel="stylesheet" href="styles.css">
 
-  <!-- Tailwind Config (убирает предупреждение) -->
+  <!-- Tailwind Config -->
   <script>
     tailwind.config = {
       content: [],
       theme: {
         extend: {}
       }
-    }
+    };
+    // Silence the "cdn.tailwindcss.com should not be used in production" message.
+    // This is a desktop Electron tool; CDN is used to avoid a full build step.
+    (function(){try{var _w=console.warn;console.warn=function(m){if(m&&String(m).toLowerCase().includes('tailwindcss'))return;_w.apply(console,arguments);};}catch(e){}})();
   </script>
+
+  <!-- CSP tuned for this app: allows Tailwind CDN, FontAwesome from cdnjs (css + fonts), local assets, inline handlers and styles we generate.
+       Removing 'unsafe-eval' to reduce Electron's insecure CSP warning. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob: https://cdn.tailwindcss.com https://cdnjs.cloudflare.com; script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://cdnjs.cloudflare.com; font-src 'self' data: https://cdnjs.cloudflare.com; img-src 'self' data:;">
 </head>
 <body class="bg-gray-950 text-gray-100 overflow-hidden">
   <div class="flex h-screen">
@@ -54,15 +61,15 @@
       <!-- Top Bar -->
       <div class="h-14 bg-slate-900 border-b border-slate-700 flex items-center px-6 justify-between flex-shrink-0">
         <div class="flex items-center gap-3">
-          <button onclick="toggleSidebar()" id="top-toggle-btn" class="text-slate-400 hover:text-white p-1.5 rounded hover:bg-slate-800 transition-colors" title="Свернуть/развернуть меню (сайдбар)">
+          <button id="top-toggle-btn" class="text-slate-400 hover:text-white p-1.5 rounded hover:bg-slate-800 transition-colors" title="Свернуть/развернуть меню (сайдбар)">
             <i class="fas fa-chevron-left text-sm chevron-top"></i>
           </button>
           <h2 class="text-xl font-semibold text-white" id="window-title">GTerminalPro</h2>
-          <div id="db-label" class="px-3 py-1 text-xs bg-slate-800 text-blue-400 rounded-full font-mono">main.db</div>
+          <div id="db-label" class="px-3 py-1 text-xs bg-slate-800 text-blue-400 rounded-full font-mono" title="database from config"></div>
         </div>
 
         <div class="flex items-center gap-4 text-slate-400">
-          <button onclick="reloadCurrentWindow()" class="hover:text-white transition-colors" title="Обновить данные / переподключить БД">
+          <button id="reload-btn" class="hover:text-white transition-colors" title="Обновить данные / переподключить БД">
             <i class="fas fa-sync-alt"></i>
           </button>
           <div class="w-px h-6 bg-slate-700"></div>

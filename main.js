@@ -1,33 +1,92 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const Database = require('better-sqlite3');
 
 const bcrypt = require('bcryptjs');
 
+const isPackaged = app.isPackaged;
+
+// Suppress Chromium cache errors on Windows (common in portable builds / restricted folders)
+// and force cache/userData next to the forced C:\GTerminalPro config for consistency
+app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');
+app.commandLine.appendSwitch('disk-cache-size', '0');
+app.commandLine.appendSwitch('media-cache-size', '0');
+app.commandLine.appendSwitch('disable-http-cache');
+
+// Suppress common DevTools protocol noise ("Autofill.enable" not found).
+// Harmless warning that appears when DevTools is open in many Electron apps.
+app.commandLine.appendSwitch('disable-features', 'Autofill,AutofillServerCommunication');
+app.commandLine.appendSwitch('disable-blink-features', 'Autofill');
+
+// More attempts to kill autofill protocol noise in DevTools
+app.commandLine.appendSwitch('disable-features', 'Autofill,AutofillServerCommunication,AutofillAssistant');
+app.commandLine.appendSwitch('disable-blink-features', 'Autofill,AutofillAssistant');
+
+const portableUserData = 'C:\\GTerminalPro\\data';
+const portableCacheDir = path.join(portableUserData, 'cache');
+const portableLogsDir = path.join(portableUserData, 'logs');
+
+try {
+  if (!fs.existsSync(portableUserData)) {
+    fs.mkdirSync(portableUserData, { recursive: true });
+  }
+  if (!fs.existsSync(portableCacheDir)) {
+    fs.mkdirSync(portableCacheDir, { recursive: true });
+  }
+  if (!fs.existsSync(portableLogsDir)) {
+    fs.mkdirSync(portableLogsDir, { recursive: true });
+  }
+  app.setPath('userData', portableUserData);
+  app.setPath('cache', portableCacheDir);
+  app.setPath('logs', portableLogsDir);
+} catch (e) {
+  console.error('Failed to set portable userData/cache:', e);
+}
+
 let currentUser = null;
 let mainWindow;
 let db = null;
+let cachedConfig = null;
+let cachedConfigPath = null;
+let cachedConfigMtime = 0;
+
+function openDatabase(dbPath) {
+  if (db) {
+    try { db.close(); } catch (_) {}
+    db = null;
+  }
+  db = new Database(dbPath);
+  try {
+    db.pragma('journal_mode = WAL');
+    db.pragma('synchronous = NORMAL');
+    db.pragma('cache_size = -64000');
+    db.pragma('temp_store = MEMORY');
+  } catch (_) {}
+  return db;
+}
 
 ipcMain.handle('login', async (event, login, password) => {
   try {
+    let configPath;
+    let config;
 
     // если БД ещё не открыта
     if (!db) {
-
-      const config = getConfig();
+      configPath = resolveConfigPath();
+      config = getConfig();
 
       if (!fs.existsSync(config.database)) {
         return {
           success: false,
-          error: 'База не найдена'
+          error: 'База не найдена (использован конфиг: ' + configPath + ')'
         };
       }
 
-      db = new Database(config.database);
+      openDatabase(config.database);
+    } else {
+      configPath = resolveConfigPath();
     }
-
-    console.log('LOGIN:', login);
 
     const user = db.prepare(`
       SELECT *
@@ -36,10 +95,8 @@ ipcMain.handle('login', async (event, login, password) => {
       AND IS_ACTIVE = 1
     `).get(login);
 
-    console.log('USER:', user);
-
     if (!user) {
-      return { success: false };
+      return { success: false, error: 'Пользователь не найден (config: ' + configPath + ')' };
     }
 
     const valid = await bcrypt.compare(
@@ -47,10 +104,8 @@ ipcMain.handle('login', async (event, login, password) => {
       user.PASSWORD_HASH
     );
 
-    console.log('VALID:', valid);
-
     if (!valid) {
-      return { success: false };
+      return { success: false, error: 'Неверный пароль (config: ' + configPath + ')' };
     }
 
     currentUser = {
@@ -74,9 +129,10 @@ ipcMain.handle('login', async (event, login, password) => {
 
     console.error(err);
 
+    const configPath = resolveConfigPath ? resolveConfigPath() : 'unknown';
     return {
       success: false,
-      error: err.message
+      error: err.message + ' (config: ' + configPath + ')'
     };
   }
 });
@@ -88,7 +144,6 @@ ipcMain.handle('get-current-user', () => {
 
 // ==================== PATHS ====================
 
-const isPackaged = app.isPackaged;
 const isDev = !isPackaged;
 
 // For portable exe: prefer directory next to the .exe
@@ -97,19 +152,32 @@ const APP_DIR = isPackaged
   ? path.dirname(process.execPath)   // the folder containing the portable .exe
   : 'C:/GTerminalPro';               // legacy installed path for config/db fallback
 
+// Force export path for Excel/CSV to always be C:\GTerminalPro\exports
+// (as per requirement, independent of where the portable EXE is located or run from)
+const EXPORT_DIR = 'C:\\GTerminalPro\\exports';
+const TEMPLATE_DIR = 'C:\\GTerminalPro\\templates';
+
+
+
 function resolveConfigPath() {
+  const canonical = 'C:\\GTerminalPro\\config.json';
+
+  // Always prefer C:\GTerminalPro as user requires (for portable build and run)
+  // even if exe is run from other location
+  if (fs.existsSync(canonical)) {
+    return canonical;
+  }
+
+  // Fallbacks
   const candidates = [];
 
-  // 1. Next to the portable exe (best for portable version)
   if (isPackaged) {
     candidates.push(path.join(APP_DIR, 'config.json'));
   }
 
-  // 2. Legacy installed path
   const installed = path.join(APP_DIR, 'config.json');
   candidates.push(installed);
 
-  // 3. Dev / packaged asar relative
   candidates.push(path.join(__dirname, 'config', 'config.json'));
   candidates.push(path.join(__dirname, 'config.json'));
 
@@ -119,11 +187,20 @@ function resolveConfigPath() {
     }
   }
 
-  throw new Error(`Файл конфигурации не найден. Проверены пути:\n` + candidates.join('\n'));
+  // If still not, try to use canonical anyway (will fail later with clear error)
+  return canonical;
 }
 
 function getConfig() {
   const configPath = resolveConfigPath();
+  try {
+    const stat = fs.statSync(configPath);
+    if (cachedConfig && cachedConfigPath === configPath && cachedConfigMtime === stat.mtimeMs) {
+      return cachedConfig;
+    }
+    cachedConfigMtime = stat.mtimeMs;
+  } catch (_) {}
+
   const raw = JSON.parse(fs.readFileSync(configPath, 'utf8'));
 
   // Resolve relative DB paths relative to project root (not the config file itself),
@@ -137,34 +214,154 @@ function getConfig() {
     }
     raw.database = path.resolve(root, raw.database);
   }
+
+  // Resolve logo path if relative (for custom logo in config)
+  if (raw.logo && !path.isAbsolute(raw.logo)) {
+    let root = path.dirname(configPath);
+    if (path.basename(root) === 'config') {
+      root = path.dirname(root);
+    }
+    raw.logo = path.resolve(root, raw.logo);
+  }
+
+  cachedConfig = raw;
+  cachedConfigPath = configPath;
   return raw;
 }
 
-const EXPORT_DIR = isDev
-  ? path.join(__dirname, 'exports')
-  : path.join(APP_DIR, 'exports');
+function ensureExportDir() {
+  if (!fs.existsSync(EXPORT_DIR)) {
+    fs.mkdirSync(EXPORT_DIR, { recursive: true });
+  }
+}
+
+function ensureTemplateDir() {
+  if (!fs.existsSync(TEMPLATE_DIR)) {
+    fs.mkdirSync(TEMPLATE_DIR, { recursive: true });
+  }
+}
+
+function resolveTemplatePath(templateDir, templateFile) {
+  const file = String(templateFile || '').trim();
+  if (!file) return null;
+  if (path.isAbsolute(file) && fs.existsSync(file)) return file;
+  const dir = String(templateDir || TEMPLATE_DIR).trim() || TEMPLATE_DIR;
+  const joined = path.join(dir, file);
+  if (fs.existsSync(joined)) return joined;
+  if (fs.existsSync(file)) return path.resolve(file);
+  return joined;
+}
+
+function buildOutputFilename(pattern, data, fallback) {
+  let name = String(pattern || fallback || ('export_' + Date.now() + '.xlsx')).trim();
+  if (!/\.xlsx?$/i.test(name)) name += '.xlsx';
+  name = name.replace(/\{(\w+)\}/g, (_, key) => {
+    const val = data && data[key];
+    return val != null ? String(val).replace(/[\\/:*?"<>|]/g, '_') : '';
+  });
+  return path.basename(name) || ('export_' + Date.now() + '.xlsx');
+}
+
+function sanitizeExportRows(data) {
+  if (!Array.isArray(data)) return [];
+  return data.map(row => {
+    const out = {};
+    for (const [key, val] of Object.entries(row || {})) {
+      if (val == null) {
+        out[key] = '';
+      } else if (Buffer.isBuffer(val)) {
+        out[key] = val.toString('utf8');
+      } else if (typeof val === 'bigint') {
+        out[key] = val.toString();
+      } else if (val instanceof Date) {
+        out[key] = val.toISOString();
+      } else if (typeof val === 'object') {
+        out[key] = JSON.stringify(val);
+      } else {
+        out[key] = val;
+      }
+    }
+    return out;
+  });
+}
 
 if (!fs.existsSync(EXPORT_DIR)) {
   fs.mkdirSync(EXPORT_DIR, { recursive: true });
 }
+ensureTemplateDir();
 
 // ==================== WINDOW ====================
 
 function createWindow() {
+  console.log('[MAIN] createWindow called, isPackaged=', isPackaged);
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 850,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
-      contextIsolation: true
+      contextIsolation: true,
+      devTools: true,
+      disableBlinkFeatures: 'Autofill'
     }
   });
 
-  mainWindow.loadFile('login.html');
+  mainWindow.loadFile(path.join(__dirname, 'login.html'));
+  console.log('[MAIN] loadFile login.html called');
+
+  // Restore Ctrl+Shift+I and F12 for DevTools (menu was removed)
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if ((input.control && input.shift && input.key.toLowerCase() === 'i') || input.key === 'F12') {
+      mainWindow.webContents.toggleDevTools();
+      event.preventDefault();
+    }
+  });
+
+  // Suppress harmless DevTools protocol errors like "Autofill.enable" that
+  // appear in the console when DevTools is open. These do not affect the app.
+  mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
+    if (sourceId && sourceId.includes('devtools')) {
+      event.preventDefault();
+    }
+  });
+
+  mainWindow.webContents.on('did-finish-load', () => {
+    // Force the db-label from main process using the real config.
+    // This ensures it shows the correct name (e.g. database_BPC.db) even if renderer has timing/JS issues.
+    try {
+      const cfg = getConfig();
+      if (cfg && cfg.database) {
+        const display = cfg.database.split(/[/\\]/).pop();
+        const fullPath = cfg.database.replace(/\\/g, '\\\\'); // escape for JS string
+        mainWindow.webContents.executeJavaScript(`
+          (function() {
+            const lbl = document.getElementById('db-label');
+            if (lbl) {
+              lbl.textContent = '${display}';
+              lbl.title = '${fullPath}';
+            }
+            // Force sidebar expanded so window list is visible
+            const sb = document.querySelector('.sidebar');
+            if (sb) sb.classList.remove('collapsed');
+            const chev = document.querySelector('.chevron-top');
+            if (chev) {
+              chev.classList.remove('fa-chevron-right');
+              chev.classList.add('fa-chevron-left');
+            }
+          })();
+        `).catch(() => {});
+      }
+    } catch (e) {}
+    console.log('[MAIN] did-finish-load for main window, forced label and sidebar');
+  });
 }
 
 app.whenReady().then(() => {
+  Menu.setApplicationMenu(null); // убрали стандартное меню File/Edit/View
+
+  // Extra safety: ensure dirs (already done at top level)
+
+
   createWindow();
 
   app.on('activate', () => {
@@ -186,40 +383,40 @@ ipcMain.handle('get-config', () => {
   return getConfig();
 });
 
+ipcMain.handle('navigate-to', (event, page) => {
+  console.log('[MAIN] navigate-to called with page=', page);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    const target = (page === 'index' || page === 'main' || page === 'app') ? 'index.html' : 'login.html';
+    mainWindow.loadFile(path.join(__dirname, target));
+    console.log('[MAIN] loading', target);
+  }
+  return true;
+});
+
 // ==================== DATABASE ====================
 
 ipcMain.handle('open-db', () => {
   try {
-
     const config = getConfig();
-
     const dbPath = config.database;
 
     if (!dbPath) {
-      return {
-        success: false,
-        error: 'Поле database не указано'
-      };
+      return { success: false, error: 'Поле database не указано' };
     }
 
     if (!fs.existsSync(dbPath)) {
-      return {
-        success: false,
-        error: `База не найдена:\n${dbPath}`
-      };
+      return { success: false, error: `База не найдена:\n${dbPath}` };
     }
 
-    db = new Database(dbPath);
+    if (db) {
+      return { success: true, reused: true };
+    }
 
-    return {
-      success: true
-    };
+    openDatabase(dbPath);
+    return { success: true };
 
   } catch (err) {
-    return {
-      success: false,
-      error: err.message
-    };
+    return { success: false, error: err.message };
   }
 });
 
@@ -300,48 +497,117 @@ ipcMain.handle('get-lookup-data', (event, sql, params) => {
 // ==================== CSV EXPORT ====================
 
 ipcMain.handle('export-csv', (event, data, filename) => {
-  const Papa = require('papaparse');
-
-  const csv = Papa.unparse(data);
-
-  const exportPath = path.join(EXPORT_DIR, filename);
-
-  fs.writeFileSync(exportPath, csv);
-
-  return exportPath;
+  try {
+    const Papa = require('papaparse');
+    ensureExportDir();
+    const safeName = path.basename(filename || 'export.csv');
+    const rows = sanitizeExportRows(data);
+    if (!rows.length) {
+      return { success: false, error: 'Нет данных для экспорта' };
+    }
+    const csv = Papa.unparse(rows);
+    const exportPath = path.join(EXPORT_DIR, safeName);
+    fs.writeFileSync(exportPath, csv, 'utf8');
+    return { success: true, path: exportPath };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
 });
 
 // ==================== XLSX EXPORT ====================
 
 ipcMain.handle('export-xlsx', (event, data, filename) => {
-  const XLSX = require('xlsx');
+  try {
+    const XLSX = require('xlsx');
+    ensureExportDir();
+    const safeName = path.basename(filename || 'export.xlsx');
+    const rows = sanitizeExportRows(data);
+    if (!rows.length) {
+      return { success: false, error: 'Нет данных для экспорта' };
+    }
 
-  const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const cols = Object.keys(rows[0] || {}).map(key => ({
+      wch: Math.min(Math.max(String(key).length, 10), 50)
+    }));
+    ws['!cols'] = cols;
+    XLSX.utils.book_append_sheet(wb, ws, 'Data');
 
-  const cols = Object.keys(data[0] || {}).map(key => ({
-    wch: Math.min(Math.max(key.length, 10), 50)
-  }));
-
-  ws['!cols'] = cols;
-
-  XLSX.utils.book_append_sheet(wb, ws, 'Data');
-
-  const exportPath = path.join(EXPORT_DIR, filename);
-
-  XLSX.writeFile(wb, exportPath);
-
-  return exportPath;
+    const exportPath = path.join(EXPORT_DIR, safeName);
+    XLSX.writeFile(wb, exportPath);
+    return { success: true, path: exportPath };
+  } catch (err) {
+    console.error('[export-xlsx]', err);
+    return { success: false, error: err.message };
+  }
 });
 
 ipcMain.handle('select-file', async (event, options = {}) => {
   const { dialog } = require('electron');
   const result = await dialog.showOpenDialog({
     properties: ['openFile'],
+    defaultPath: options.defaultPath || undefined,
     filters: options.filters || [{ name: 'All Files', extensions: ['*'] }]
   });
   if (result.canceled || !result.filePaths.length) return null;
   return result.filePaths[0];
+});
+
+ipcMain.handle('export-xlsx-template', (event, options = {}) => {
+  try {
+    const XLSX = require('xlsx');
+    const {
+      templateDir,
+      templateFile,
+      templatePath,
+      cellMapping = {},
+      data = {},
+      outputFilename
+    } = options;
+
+    const tplPath = templatePath || resolveTemplatePath(templateDir, templateFile);
+    if (!tplPath || !fs.existsSync(tplPath)) {
+      return { success: false, error: 'Шаблон Excel не найден: ' + (tplPath || templateFile || '(не указан)') };
+    }
+
+    const mapKeys = Object.keys(cellMapping || {});
+    if (!mapKeys.length) {
+      return { success: false, error: 'Не задан маппинг полей → ячеек Excel' };
+    }
+
+    const wb = XLSX.readFile(tplPath);
+    const sheetName = wb.SheetNames[0];
+    const ws = wb.Sheets[sheetName];
+    if (!ws) {
+      return { success: false, error: 'Лист не найден в шаблоне Excel' };
+    }
+
+    mapKeys.forEach(field => {
+      const cellRef = String(cellMapping[field] || '').trim().toUpperCase();
+      if (!cellRef) return;
+      const raw = data[field];
+      if (raw == null || raw === '') {
+        ws[cellRef] = { t: 's', v: '' };
+        return;
+      }
+      const num = Number(raw);
+      if (!Number.isNaN(num) && String(raw).trim() !== '' && /^-?\d+(\.\d+)?$/.test(String(raw).trim())) {
+        ws[cellRef] = { t: 'n', v: num };
+      } else {
+        ws[cellRef] = { t: 's', v: String(raw) };
+      }
+    });
+
+    ensureExportDir();
+    const outName = buildOutputFilename(outputFilename, data, 'export_' + Date.now() + '.xlsx');
+    const outPath = path.join(EXPORT_DIR, outName);
+    XLSX.writeFile(wb, outPath);
+    return { success: true, path: outPath, filename: outName };
+  } catch (err) {
+    console.error('[export-xlsx-template]', err);
+    return { success: false, error: err.message };
+  }
 });
 
 ipcMain.handle('read-excel', async (event, filePath) => {
@@ -372,7 +638,8 @@ ipcMain.handle('show-details', (event, title, row, config) => {
     backgroundColor: '#0f172a',
     webPreferences: {
       nodeIntegration: false,
-      contextIsolation: true
+      contextIsolation: true,
+      disableBlinkFeatures: 'Autofill'
     }
   });
 
@@ -383,10 +650,8 @@ ipcMain.handle('show-details', (event, title, row, config) => {
     <meta charset="UTF-8">
     <title>${title}</title>
     <style>
-      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400&amp;display=swap');
-
       body {
-        font-family: 'Inter', system-ui, sans-serif;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
         background: #0f172a;
         color: #e2e8f0;
         padding: 20px;
@@ -438,7 +703,7 @@ ipcMain.handle('show-details', (event, title, row, config) => {
       }
 
       .mono {
-        font-family: 'JetBrains Mono', monospace;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
         font-size: 13px;
       }
     </style>
@@ -517,6 +782,8 @@ ipcMain.handle(
             configPath,
             JSON.stringify(config, null, 2)
         );
+        cachedConfig = null;
+        cachedConfigMtime = 0;
 
         return true;
     }

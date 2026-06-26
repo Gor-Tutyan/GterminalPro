@@ -9,6 +9,10 @@
 <title>GTerminalPro Login</title>
 
 <script src="https://cdn.tailwindcss.com"></script>
+<script>
+  // Silence Tailwind production warning for this internal desktop app
+  (function(){try{var _w=console.warn;console.warn=function(m){if(m&&String(m).toLowerCase().includes('tailwindcss'))return;_w.apply(console,arguments);};}catch(e){}})();
+</script>
 
 </head>
 
@@ -71,12 +75,23 @@ if (result.success) {
         JSON.stringify(result.user)
     );
 
-    window.location.href = 'index.html';
+    // Use main-process loadFile for reliable navigation inside asar-packaged portable EXE
+    if (window.electronAPI && window.electronAPI.navigateTo) {
+      window.electronAPI.navigateTo('index');
+    } else {
+      // fallback (should not happen)
+      window.location.href = 'index.html';
+    }
 
 } else {
 
-    document.getElementById('error')
-        .classList.remove('hidden');
+    const errEl = document.getElementById('error');
+    errEl.classList.remove('hidden');
+    if (result && result.error) {
+        errEl.textContent = 'Ошибка: ' + result.error;
+    } else {
+        errEl.textContent = 'Неверный логин или пароль';
+    }
 }
 
 }
